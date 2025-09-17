@@ -1,0 +1,20 @@
+# python cache
+__pycache__
+
+# IDE related
+.cursorrules
+
+# documents
+docs/
+
+# template
+tmp.py
+
+# config file
+*config.json
+
+# result
+results/
+
+# log
+logs/

@@ -1,0 +1,325 @@
+"""
+配置管理模块
+提供项目配置的默认值和配置管理功能
+"""
+
+import json
+import os
+from typing import Dict, Any, Optional, Union, List
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
+from core.base.constants import (
+    TENSOR_SHAPE, BATCH_SIZE, DEFAULT_DTYPE, DEFAULT_POINT_COUNT,
+    DEFAULT_INTERPOLATION, DEFAULT_SAMPLING_STRATEGY, ACTIVATION_FUNCTIONS,
+    FIXED_POINT_FORMATS, DEFAULT_FIXED_POINT_FORMAT, OUTPUT_DIRS
+)
+from core.base.exceptions import ConfigParseError, FileNotFoundError
+from core.base.logs import get_logger
+
+
+@dataclass
+class LookupTableConfig:
+    """查找表配置"""
+    point_count: int = DEFAULT_POINT_COUNT
+    interpolation_method: str = DEFAULT_INTERPOLATION
+    sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY
+    use_advanced_lookup: bool = False
+
+
+@dataclass
+class HardwareConfig:
+    """硬件配置"""
+    use_fixed_point: bool = True
+    fixed_point_format: str = DEFAULT_FIXED_POINT_FORMAT
+    enable_parallel_processing: bool = True
+    max_workers: int = 4
+
+
+@dataclass
+class OptimizationConfig:
+    """优化配置"""
+    enable_memory_pooling: bool = True
+    enable_vectorization: bool = True
+    chunk_size: int = 1000
+    memory_limit_mb: int = 1024
+
+
+@dataclass
+class TestConfig:
+    """测试配置"""
+    tensor_shape: tuple = TENSOR_SHAPE
+    batch_size: int = BATCH_SIZE
+    dtype: str = DEFAULT_DTYPE
+    num_runs: int = 100
+    warmup_runs: int = 10
+
+
+@dataclass
+class OutputConfig:
+    """输出配置"""
+    output_dir: str = "results"
+    save_tensors: bool = True
+    save_reports: bool = True
+    save_charts: bool = True
+    generate_excel: bool = True
+
+
+@dataclass
+class ProjectConfig:
+    """项目主配置"""
+    # 基本配置
+    project_name: str = "FPT25 Activation Functions"
+    version: str = "1.0.0"
+    description: str = "FPGA 激活函数硬件加速项目"
+    
+    # 子配置
+    lookup_table: LookupTableConfig = None
+    hardware: HardwareConfig = None
+    optimization: OptimizationConfig = None
+    test: TestConfig = None
+    output: OutputConfig = None
+    
+    # 激活函数配置
+    activation_functions: Dict[str, Dict[str, Any]] = None
+    
+    def __post_init__(self):
+        """初始化后处理"""
+        if self.lookup_table is None:
+            self.lookup_table = LookupTableConfig()
+        if self.hardware is None:
+            self.hardware = HardwareConfig()
+        if self.optimization is None:
+            self.optimization = OptimizationConfig()
+        if self.test is None:
+            self.test = TestConfig()
+        if self.output is None:
+            self.output = OutputConfig()
+        if self.activation_functions is None:
+            self.activation_functions = self._get_default_activation_configs()
+    
+    def _get_default_activation_configs(self) -> Dict[str, Dict[str, Any]]:
+        """获取默认激活函数配置"""
+        return {
+            'softmax': {
+                'use_lookup_table': True,
+                'lookup_table_size': 800,
+                'interpolation_method': 'linear',
+                'use_fixed_point': False,
+                'numerical_stability': True
+            },
+            'layer_norm': {
+                'eps': 1e-5,
+                'use_learnable_params': True,
+                'gamma_init': 1.0,
+                'beta_init': 0.0
+            },
+            'rms_norm': {
+                'eps': 1e-5,
+                'use_learnable_params': True,
+                'gamma_init': 1.0
+            },
+            'silu': {
+                'use_lookup_table': True,
+                'lookup_table_size': 800,
+                'interpolation_method': 'linear'
+            },
+            'gelu': {
+                'use_approximation': True,
+                'approximation_type': 'tanh'
+            },
+            'add': {},
+            'multiply': {}
+        }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ProjectConfig':
+        """从字典创建配置"""
+        # 处理嵌套配置
+        if 'lookup_table' in data and isinstance(data['lookup_table'], dict):
+            data['lookup_table'] = LookupTableConfig(**data['lookup_table'])
+        
+        if 'hardware' in data and isinstance(data['hardware'], dict):
+            data['hardware'] = HardwareConfig(**data['hardware'])
+        
+        if 'optimization' in data and isinstance(data['optimization'], dict):
+            data['optimization'] = OptimizationConfig(**data['optimization'])
+        
+        if 'test' in data and isinstance(data['test'], dict):
+            data['test'] = TestConfig(**data['test'])
+        
+        if 'output' in data and isinstance(data['output'], dict):
+            data['output'] = OutputConfig(**data['output'])
+        
+        return cls(**data)
+
+
+class ConfigManager:
+    """配置管理器"""
+    
+    def __init__(self, config_file: Optional[str] = None):
+        self.logger = get_logger()
+        self.config_file = config_file or "config.json"
+        self.config: Optional[ProjectConfig] = None
+        self._load_config()
+    
+    def _load_config(self) -> None:
+        """加载配置"""
+        try:
+            if os.path.exists(self.config_file):
+                self.config = self._load_from_file(self.config_file)
+                self.logger.info(f"从文件加载配置: {self.config_file}")
+            else:
+                self.config = ProjectConfig()
+                self._save_to_file(self.config_file, self.config)
+                self.logger.info(f"创建默认配置文件: {self.config_file}")
+        except Exception as e:
+            self.logger.error(f"配置加载失败: {e}")
+            self.config = ProjectConfig()
+    
+    def _load_from_file(self, filepath: str) -> ProjectConfig:
+        """从文件加载配置"""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return ProjectConfig.from_dict(data)
+        except json.JSONDecodeError as e:
+            raise ConfigParseError(filepath, f"JSON 解析错误: {e}")
+        except Exception as e:
+            raise ConfigParseError(filepath, f"文件读取错误: {e}")
+    
+    def _save_to_file(self, filepath: str, config: ProjectConfig) -> None:
+        """保存配置到文件"""
+        try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(config.to_dict(), f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            raise ConfigParseError(filepath, f"文件保存错误: {e}")
+    
+    def get_config(self) -> ProjectConfig:
+        """获取当前配置"""
+        if self.config is None:
+            self.config = ProjectConfig()
+        return self.config
+    
+    def update_config(self, updates: Dict[str, Any]) -> None:
+        """更新配置"""
+        if self.config is None:
+            self.config = ProjectConfig()
+        
+        # 递归更新配置
+        self._update_nested_dict(self.config.to_dict(), updates)
+        self.config = ProjectConfig.from_dict(self.config.to_dict())
+        
+        self.logger.info("配置已更新")
+    
+    def _update_nested_dict(self, base_dict: Dict[str, Any], 
+                           updates: Dict[str, Any]) -> None:
+        """递归更新嵌套字典"""
+        for key, value in updates.items():
+            if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
+                self._update_nested_dict(base_dict[key], value)
+            else:
+                base_dict[key] = value
+    
+    def save_config(self, filepath: Optional[str] = None) -> None:
+        """保存配置"""
+        save_path = filepath or self.config_file
+        self._save_to_file(save_path, self.get_config())
+        self.logger.info(f"配置已保存到: {save_path}")
+    
+    def reset_to_default(self) -> None:
+        """重置为默认配置"""
+        self.config = ProjectConfig()
+        self.logger.info("配置已重置为默认值")
+    
+    def validate_config(self) -> List[str]:
+        """验证配置"""
+        errors = []
+        config = self.get_config()
+        
+        # 验证查找表配置
+        if config.lookup_table.point_count < 100 or config.lookup_table.point_count > 2000:
+            errors.append("查找表点数应在 100-2000 之间")
+        
+        if config.lookup_table.interpolation_method not in ['direct', 'linear', 'quadratic']:
+            errors.append("插值方法必须是 direct、linear 或 quadratic")
+        
+        # 验证硬件配置
+        if config.hardware.fixed_point_format not in FIXED_POINT_FORMATS:
+            errors.append(f"定点数格式必须是 {FIXED_POINT_FORMATS} 之一")
+        
+        # 验证测试配置
+        if config.test.batch_size < 1:
+            errors.append("批处理大小必须大于 0")
+        
+        if config.test.dtype not in ['float32', 'bfloat16']:
+            errors.append("数据类型必须是 float32 或 bfloat16")
+        
+        return errors
+    
+    def get_activation_config(self, function_name: str) -> Dict[str, Any]:
+        """获取激活函数配置"""
+        config = self.get_config()
+        return config.activation_functions.get(function_name, {})
+    
+    def update_activation_config(self, function_name: str, 
+                               updates: Dict[str, Any]) -> None:
+        """更新激活函数配置"""
+        config = self.get_config()
+        if function_name not in config.activation_functions:
+            config.activation_functions[function_name] = {}
+        
+        config.activation_functions[function_name].update(updates)
+        self.logger.info(f"更新激活函数配置: {function_name}")
+    
+    def export_config(self, filepath: str) -> None:
+        """导出配置"""
+        self._save_to_file(filepath, self.get_config())
+        self.logger.info(f"配置已导出到: {filepath}")
+    
+    def import_config(self, filepath: str) -> None:
+        """导入配置"""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(filepath)
+        
+        self.config = self._load_from_file(filepath)
+        self.logger.info(f"配置已从 {filepath} 导入")
+
+
+# 全局配置管理器
+_config_manager: Optional[ConfigManager] = None
+
+
+def get_config_manager(config_file: Optional[str] = None) -> ConfigManager:
+    """获取全局配置管理器"""
+    global _config_manager
+    if _config_manager is None:
+        _config_manager = ConfigManager(config_file)
+    return _config_manager
+
+
+def get_config() -> ProjectConfig:
+    """获取当前配置便捷函数"""
+    manager = get_config_manager()
+    return manager.get_config()
+
+
+def load_config(filepath: str) -> ProjectConfig:
+    """加载配置文件便捷函数"""
+    manager = ConfigManager(filepath)
+    return manager.get_config()
+
+
+def save_config(config: ProjectConfig, filepath: str) -> None:
+    """保存配置便捷函数"""
+    manager = ConfigManager()
+    manager.config = config
+    manager.save_config(filepath)
