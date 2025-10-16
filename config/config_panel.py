@@ -37,7 +37,7 @@ class ConfigPanel:
         return {
             'lookup_table': [
                 ConfigOption(
-                    name='point_count',
+                    name='bit_len',
                     description='查找表点数',
                     value_type=int,
                     default_value=800,

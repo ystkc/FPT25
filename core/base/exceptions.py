@@ -113,10 +113,10 @@ class UnsupportedDataTypeError(TensorError):
 class InvalidPointCountError(LookupTableError):
     """无效查找表点数异常"""
     
-    def __init__(self, point_count: int, min_count: int, max_count: int):
-        message = f"查找表点数无效: {point_count}, 应在 {min_count}-{max_count} 之间"
-        super().__init__(message, "INVALID_POINT_COUNT", {
-            'point_count': point_count,
+    def __init__(self, bit_len: int, min_count: int, max_count: int):
+        message = f"查找表点数无效: {bit_len}, 应在 {min_count}-{max_count} 之间"
+        super().__init__(message, "INVALID_bit_len", {
+            'bit_len': bit_len,
             'min_count': min_count,
             'max_count': max_count
         })
@@ -290,17 +290,17 @@ def validate_dtype(dtype: str, supported_types: list) -> None:
         raise UnsupportedDataTypeError(dtype, supported_types)
 
 
-def validate_point_count(point_count: int, min_count: int, max_count: int) -> None:
+def validate_bitlen(bit_len: int, min_bitlen: int, max_bitlen: int) -> None:
     """
-    验证查找表点数
+    验证查找表位宽数
     
     Args:
-        point_count: 点数
-        min_count: 最小点数
-        max_count: 最大点数
+        bit_len: 点数
+        min_bitlen: 最小点数
+        max_bitlen: 最大点数
     
     Raises:
         InvalidPointCountError: 点数无效时抛出
     """
-    if not (min_count <= point_count <= max_count):
-        raise InvalidPointCountError(point_count, min_count, max_count)
+    if not (min_bitlen <= bit_len <= max_bitlen):
+        raise InvalidPointCountError(bit_len, min_bitlen, max_bitlen)

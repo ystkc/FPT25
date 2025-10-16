@@ -339,11 +339,11 @@ class PerformanceLogger:
                   f"精度: {accuracy:.6f}")
         self.logger.info(message)
     
-    def log_lookup_table_generation(self, table_type: str, point_count: int, 
+    def log_lookup_table_generation(self, table_type: str, bit_len: int, 
                                   generation_time: float) -> None:
         """记录查找表生成信息"""
         message = (f"查找表生成: {table_type}, "
-                  f"点数: {point_count}, "
+                  f"点数: {bit_len}, "
                   f"生成时间: {generation_time:.6f}s")
         self.logger.info(message)
     

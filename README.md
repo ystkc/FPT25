@@ -37,13 +37,13 @@ python main.py --mode test --function softmax
 python main.py --mode benchmark --function all
 
 # 精度测试
-python main.py --mode accuracy --function softmax --point_count 800
+python main.py --mode accuracy --function softmax --bit_len 800
 
 # 优化测试
 python main.py --mode optimize --function softmax --interpolation quadratic
 
 # 高精度测试（推荐配置）
-python main.py --mode benchmark --function softmax --point_count 2000 --interpolation quadratic --sampling_strategy adaptive
+python main.py --mode benchmark --function softmax --bit_len 2000 --interpolation quadratic --sampling_strategy adaptive
 
 # 所有激活函数测试
 python main.py --mode benchmark --function all
@@ -55,14 +55,14 @@ python main.py --mode benchmark --function all
 | ----------------------- | -------- | ------------- | --------------------------------------------------------------------------------------- |
 | `--mode`                | 选择     | `benchmark`   | 运行模式：`test`、`benchmark`、`optimize`、`all_functions`                              |
 | `--function`            | 选择     | `softmax`     | 激活函数：`softmax`、`layer_norm`、`rms_norm`、`silu`、`gelu`、`add`、`multiply`、`all` |
-| `--point_count`         | 整数     | `2000`        | 查找表点数（1500-3000）                                                                 |
+| `--bit_len`         | 整数     | `2000`        | 查找表点数（1500-3000）                                                                 |
 | `--interpolation`       | 选择     | `quadratic`   | 插值方法：`direct`、`linear`、`quadratic`                                               |
 | `--sampling_strategy`   | 选择     | `adaptive`    | 采样策略：`uniform`、`adaptive`、`logarithmic`、`quadratic`                             |
-| `--use_advanced_lookup` | 标志     | `True`        | 使用高级查找表（非均匀采样）                                                            |
+| `--use_advanced_lookup` | 标志     | `true`        | 使用高级查找表（非均匀采样）                                                            |
 | `--batch_size`          | 整数     | `16`          | 批处理大小                                                                              |
 | `--tensor_shape`        | 两个整数 | `64 768`      | 张量形状（高度 宽度）                                                                   |
 | `--dtype`               | 选择     | `bfloat16`    | 数据类型：`float32`、`bfloat16`                                                         |
-| `--use_fixed_point`     | 标志     | `False`       | 使用定点数计算                                                                          |
+| `--use_fixed_point`     | 标志     | `false`       | 使用定点数计算                                                                          |
 | `--fixed_point_format`  | 选择     | `Q16_16`      | 定点数格式：`Q8_8`、`Q16_16`、`Q32_32`、`Q8_24`                                         |
 | `--output_dir`          | 字符串   | `results/`    | 输出目录                                                                                |
 | `--config`              | 字符串   | `config.json` | 配置文件路径                                                                            |
@@ -240,17 +240,41 @@ python -m pytest tests/test_hardware_optimization.py -v
 ```json
 {
   "lookup_table": {
-    "point_count": 2000,
+    "bit_len": 2000,
     "interpolation_method": "quadratic",
     "sampling_strategy": "adaptive",
     "use_advanced_lookup": true
   },
-  "softmax": {
-    "use_lookup_table": true,
-    "lookup_table_size": 2000,
-    "interpolation_method": "quadratic",
-    "use_fixed_point": false,
-    "numerical_stability": true
+  "activation_functions": {
+    "softmax": {
+        "use_lookup_table": true,
+        "lookup_bit_len": 800,
+        "interpolation_method": "linear",
+        "use_fixed_point": false,
+        "numerical_stability": true
+    },
+    "layer_norm": {
+        "eps": 1e-5,
+        "use_learnable_params": true,
+        "gamma_init": 1.0,
+        "beta_init": 0.0
+    },
+    "rms_norm": {
+        "eps": 1e-5,
+        "use_learnable_params": true,
+        "gamma_init": 1.0
+    },
+    "silu": {
+        "use_lookup_table": true,
+        "lookup_bit_len": 800,
+        "interpolation_method": "linear"
+    },
+    "gelu": {
+        "use_approximation": true,
+        "approximation_type": "tanh"
+    },
+    "add": {},
+    "multiply": {}
   }
 }
 ```

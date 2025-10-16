@@ -3,6 +3,7 @@
 统一管理所有激活函数的创建、调用和优化
 """
 
+import traceback
 import torch
 from typing import Dict, List, Optional, Any, Union, Callable
 from abc import ABC, abstractmethod
@@ -179,8 +180,8 @@ class ActivationFunctionManager:
             global_config = get_config()
             
             # 获取激活函数配置
-            if hasattr(global_config, 'activation_functions') and function_name in global_config.activation_functions:
-                function_config = global_config.activation_functions[function_name]
+            if hasattr(global_config, 'activation_functions') and hasattr(global_config.activation_functions, function_name):
+                function_config = getattr(global_config.activation_functions, function_name)
                 
                 # 创建配置对象
                 config_dict = {}
@@ -195,6 +196,7 @@ class ActivationFunctionManager:
                 
         except Exception as e:
             self.logger.warning(f"从全局配置加载 {function_name} 配置失败: {e}，使用默认配置")
+            traceback.print_exc()
             return config_class()
     
     def get_function(self, name: str) -> BaseActivationFunction:

@@ -4,6 +4,7 @@
 """
 
 import math
+import torch
 from typing import Tuple, List, Dict, Any
 
 # =============================================================================
@@ -17,6 +18,16 @@ BATCH_SIZE: int = 16  # 批处理大小
 # 数据类型
 SUPPORTED_DTYPES: List[str] = ['float32', 'bfloat16']
 DEFAULT_DTYPE: str = 'bfloat16'
+DEFAULT_UNSIGNED_TYPE: str = 'uint16'
+DEFAULT_DTYPE_LEN: int = 16
+
+# 数据映射(将str映射到dtype)
+DATA_TYPE_MAP: Dict[str, torch.dtype] = {
+    'float32': torch.float32,
+    'bfloat16': torch.bfloat16,
+    'uint32': torch.uint32,
+    'uint16': torch.uint16,
+}
 
 # 精度评估参数
 EPSILON_STAR: float = 1e-3  # 无损精度阈值
@@ -31,8 +42,8 @@ EPSILON_TINY: float = 1e-12  # 防止除零的小常数
 TABLE_THRESH: float = 0.5 * math.log(2)  # 查找表阈值
 
 # 查找表点数范围 - 增加点数以提高精度
-POINT_COUNT_RANGE: Tuple[int, int, int] = (1500, 3000, 100)  # (min, max, step)
-DEFAULT_POINT_COUNT: int = 2000
+BIT_LEN_RANGE: Tuple[int, int, int] = (10, 32, 1)  # (min, max, step)
+DEFAULT_BIT_LEN: int = 12
 
 # 插值方法
 INTERPOLATION_METHODS: List[str] = ['direct', 'linear', 'quadratic']
@@ -146,7 +157,7 @@ TEST_CONFIG: Dict[str, Any] = {
     'test_tensor_shapes': [(32, 128), (64, 256), (64, 768)],
     'test_batch_sizes': [1, 4, 8, 16],
     'test_dtypes': ['float32', 'bfloat16'],
-    'test_point_counts': [800, 900, 1000],
+    'test_bit_lens': [800, 900, 1000],
     'test_interpolations': ['direct', 'linear', 'quadratic']
 }
 
@@ -177,7 +188,7 @@ LOG_DATE_FORMAT: str = '%Y-%m-%d %H:%M:%S'
 ERROR_MESSAGES: Dict[str, str] = {
     'invalid_tensor_shape': '张量形状必须为 (64, 768)',
     'invalid_dtype': '不支持的数据类型，支持的类型: {supported_types}',
-    'invalid_point_count': '查找表点数必须在 {min_count} 到 {max_count} 之间',
+    'invalid_bit_len': '查找表点数必须在 {min_count} 到 {max_count} 之间',
     'invalid_interpolation': '不支持的插值方法: {method}',
     'tensor_dimension_mismatch': '张量维度不匹配',
     'numerical_overflow': '数值溢出',

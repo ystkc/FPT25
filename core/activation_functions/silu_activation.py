@@ -17,7 +17,7 @@ from core.base.logs import get_logger
 class SiLUConfig(ActivationConfig):
     """SiLU 配置"""
     use_lookup_table: bool = True
-    lookup_table_size: int = 800
+    lookup_bit_len: int = 800
     interpolation_method: str = 'linear'
 
 
@@ -39,10 +39,10 @@ class SiLUActivation(BaseActivationFunction):
             from core.algorithms import create_sigmoid_table
             self.lookup_table = create_sigmoid_table(
                 name="silu_sigmoid",
-                point_count=self.config.lookup_table_size,
+                bit_len=self.config.lookup_bit_len,
                 interpolation_method=self.config.interpolation_method
             )
-            self.logger.info(f"SiLU 查找表初始化完成: {self.config.lookup_table_size} 点")
+            self.logger.info(f"SiLU 查找表初始化完成: {self.config.lookup_bit_len} 点")
         except Exception as e:
             self.logger.warning(f"查找表初始化失败，将使用直接计算: {e}")
             self.lookup_table = None
@@ -76,7 +76,7 @@ class SiLUActivation(BaseActivationFunction):
         """获取配置信息"""
         return {
             'use_lookup_table': self.config.use_lookup_table,
-            'lookup_table_size': self.config.lookup_table_size,
+            'lookup_bit_len': self.config.lookup_bit_len,
             'interpolation_method': self.config.interpolation_method,
             'dtype': self.config.dtype
         }

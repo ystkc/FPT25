@@ -104,6 +104,8 @@ class FPT25Main:
             
         except Exception as e:
             self.logger.error(f"测试失败: {function_name}, 错误: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 'function_name': function_name,
                 'success': False,
@@ -224,7 +226,7 @@ class FPT25Main:
             
             result = {
                 'function_name': function_name,
-                'optimization_type': 'lookup_table_size',
+                'optimization_type': 'lookup_bit_len',
                 'success': True,
                 'message': '优化完成'
             }
@@ -312,7 +314,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
 示例用法:
   python main.py --mode test --function softmax
   python main.py --mode benchmark --function all
-  python main.py --mode accuracy --function softmax --point_count 800
+  python main.py --mode accuracy --function softmax --bit_len 800
   python main.py --mode optimize --function softmax --interpolation linear
         """
     )
@@ -325,7 +327,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
                        default='softmax', help='激活函数名称')
     
     # 查找表参数
-    parser.add_argument('--point_count', type=int, default=800,
+    parser.add_argument('--bit_len', type=int, default=800,
                        help='查找表点数 (795-1000)')
     parser.add_argument('--interpolation', choices=['direct', 'linear', 'quadratic'],
                        default='linear', help='插值方法')
@@ -385,7 +387,7 @@ def main():
     
     # 准备参数
     kwargs = {
-        'point_count': args.point_count,
+        'bit_len': args.bit_len,
         'interpolation': args.interpolation,
         'sampling_strategy': args.sampling_strategy,
         'use_advanced_lookup': args.use_advanced_lookup,

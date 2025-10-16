@@ -1,38 +1,38 @@
-# FPT25 æ¿€æ´»å‡½æ•° FPGA ç¡¬ä»¶åŠ é€Ÿé¡¹ç›®ä¾èµ–
+# FPT25 ¼¤»îº¯Êý FPGA Ó²¼þ¼ÓËÙÏîÄ¿ÒÀÀµ
 
-# æ ¸å¿ƒä¾èµ–
+# ºËÐÄÒÀÀµ
 torch>=2.0.0
 numpy>=1.21.0
 pandas>=1.3.0
 matplotlib>=3.5.0
 psutil>=5.8.0
 
-# æ•°æ®å¤„ç†
+# Êý¾Ý´¦Àí
 scipy>=1.7.0
 scikit-learn>=1.0.0
 
-# é…ç½®å’Œæ—¥å¿—
+# ÅäÖÃºÍÈÕÖ¾
 pyyaml>=6.0
 colorama>=0.4.4
 
-# Excel æ”¯æŒ
+# Excel Ö§³Ö
 openpyxl>=3.0.9
 xlsxwriter>=3.0.3
 
-# å¯é€‰ GPU æ”¯æŒ
-# nvidia-ml-py3>=7.352.0  # å–æ¶ˆæ³¨é‡Šä»¥å¯ç”¨ GPU ç›‘æŽ§
+# ¿ÉÑ¡ GPU Ö§³Ö
+# nvidia-ml-py3>=7.352.0  # È¡Ïû×¢ÊÍÒÔÆôÓÃ GPU ¼à¿Ø
 
-# å¼€å‘å’Œæµ‹è¯•
+# ¿ª·¢ºÍ²âÊÔ
 pytest>=6.0.0
 pytest-cov>=2.12.0
 black>=21.0.0
 flake8>=3.9.0
 mypy>=0.910
 
-# æ–‡æ¡£ç”Ÿæˆ
+# ÎÄµµÉú³É
 sphinx>=4.0.0
 sphinx-rtd-theme>=0.5.0
 
-# æ€§èƒ½åˆ†æž
+# ÐÔÄÜ·ÖÎö
 memory-profiler>=0.60.0
 line-profiler>=3.3.0

@@ -5,23 +5,33 @@
 
 import json
 import os
+import traceback
 from typing import Dict, Any, Optional, Union, List
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from core.base.constants import (
-    TENSOR_SHAPE, BATCH_SIZE, DEFAULT_DTYPE, DEFAULT_POINT_COUNT,
+    TENSOR_SHAPE, BATCH_SIZE, DEFAULT_DTYPE, DEFAULT_BIT_LEN,
     DEFAULT_INTERPOLATION, DEFAULT_SAMPLING_STRATEGY, ACTIVATION_FUNCTIONS,
     FIXED_POINT_FORMATS, DEFAULT_FIXED_POINT_FORMAT, OUTPUT_DIRS
 )
 from core.base.exceptions import ConfigParseError, FileNotFoundError
+from core.algorithms.lookup_table import LookupTableConfig
+from core.activation_functions.softmax_activation import SoftmaxConfig
+from core.activation_functions.layer_norm_activation import LayerNormConfig
+from core.activation_functions.rms_norm_activation import RMSNormConfig
+from core.activation_functions.silu_activation import SiLUConfig
+from core.activation_functions.gelu_activation import GELUConfig
+from core.activation_functions.add_activation import AddConfig
+from core.activation_functions.multiply_activation import MultiplyConfig
 from core.base.logs import get_logger
 
 
 @dataclass
 class LookupTableConfig:
     """查找表配置"""
-    point_count: int = DEFAULT_POINT_COUNT
+    bit_len: int = DEFAULT_BIT_LEN
+    dtype: str = DEFAULT_DTYPE
     interpolation_method: str = DEFAULT_INTERPOLATION
     sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY
     use_advanced_lookup: bool = False
@@ -64,6 +74,17 @@ class OutputConfig:
     save_charts: bool = True
     generate_excel: bool = True
 
+@dataclass
+class ActivationFunctions:
+    """激活函数配置"""
+    softmax: SoftmaxConfig = None
+    layer_norm: LayerNormConfig = None
+    rms_norm: RMSNormConfig = None
+    silu: SiLUConfig = None
+    gelu: GELUConfig = None
+    add: AddConfig = None
+    multiply: MultiplyConfig = None
+
 
 @dataclass
 class ProjectConfig:
@@ -96,41 +117,7 @@ class ProjectConfig:
         if self.output is None:
             self.output = OutputConfig()
         if self.activation_functions is None:
-            self.activation_functions = self._get_default_activation_configs()
-    
-    def _get_default_activation_configs(self) -> Dict[str, Dict[str, Any]]:
-        """获取默认激活函数配置"""
-        return {
-            'softmax': {
-                'use_lookup_table': True,
-                'lookup_table_size': 800,
-                'interpolation_method': 'linear',
-                'use_fixed_point': False,
-                'numerical_stability': True
-            },
-            'layer_norm': {
-                'eps': 1e-5,
-                'use_learnable_params': True,
-                'gamma_init': 1.0,
-                'beta_init': 0.0
-            },
-            'rms_norm': {
-                'eps': 1e-5,
-                'use_learnable_params': True,
-                'gamma_init': 1.0
-            },
-            'silu': {
-                'use_lookup_table': True,
-                'lookup_table_size': 800,
-                'interpolation_method': 'linear'
-            },
-            'gelu': {
-                'use_approximation': True,
-                'approximation_type': 'tanh'
-            },
-            'add': {},
-            'multiply': {}
-        }
+            self.activation_functions = ActivationFunctions()
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -154,6 +141,9 @@ class ProjectConfig:
         
         if 'output' in data and isinstance(data['output'], dict):
             data['output'] = OutputConfig(**data['output'])
+
+        if 'activation_functions' in data and isinstance(data['activation_functions'], dict):
+            data['activation_functions'] = ActivationFunctions(**data['activation_functions'])
         
         return cls(**data)
 
@@ -246,7 +236,7 @@ class ConfigManager:
         config = self.get_config()
         
         # 验证查找表配置
-        if config.lookup_table.point_count < 100 or config.lookup_table.point_count > 2000:
+        if config.lookup_table.bit_len < 100 or config.lookup_table.bit_len > 2000:
             errors.append("查找表点数应在 100-2000 之间")
         
         if config.lookup_table.interpolation_method not in ['direct', 'linear', 'quadratic']:

@@ -27,6 +27,13 @@ class FixedPointConfig:
     fractional_bits: int = 16
     signed: bool = True
     rounding_mode: str = 'round'  # 'round', 'floor', 'ceil', 'trunc'
+    
+    def __post_init__(self):
+        '''计算当前定点数的最大值和最小值'''
+        self.total_bits = self.integer_bits + self.fractional_bits
+        self.scale_factor = 2 ** self.fractional_bits
+        self.max_value = (2 ** (self.total_bits - 1) - 1) / self.scale_factor if self.signed else (2 ** self.total_bits - 1) / self.scale_factor
+        self.min_value = -(2 ** (self.total_bits - 1)) / self.scale_factor if self.signed else 0
 
 
 class FixedPointNumber:

@@ -12,8 +12,8 @@ from .constants import (
     EPSILON_MAX,
     EPSILON_TINY,
     TABLE_THRESH,
-    POINT_COUNT_RANGE,
-    DEFAULT_POINT_COUNT,
+    BIT_LEN_RANGE,
+    DEFAULT_BIT_LEN,
     INTERPOLATION_METHODS,
     DEFAULT_INTERPOLATION,
     SAMPLING_STRATEGIES,
@@ -72,7 +72,7 @@ from .exceptions import (
     handle_exception,
     validate_tensor_shape,
     validate_dtype,
-    validate_point_count
+    validate_bitlen
 )
 
 from .logs import (
@@ -91,7 +91,7 @@ __all__ = [
     # 常量
     'TENSOR_SHAPE', 'BATCH_SIZE', 'SUPPORTED_DTYPES', 'DEFAULT_DTYPE',
     'EPSILON_STAR', 'EPSILON_MAX', 'EPSILON_TINY', 'TABLE_THRESH',
-    'POINT_COUNT_RANGE', 'DEFAULT_POINT_COUNT', 'INTERPOLATION_METHODS',
+    'BIT_LEN_RANGE', 'DEFAULT_BIT_LEN', 'INTERPOLATION_METHODS',
     'DEFAULT_INTERPOLATION', 'SAMPLING_STRATEGIES', 'DEFAULT_SAMPLING_STRATEGY',
     'ACTIVATION_FUNCTION_WEIGHTS', 'ACTIVATION_FUNCTIONS', 'FIXED_POINT_FORMATS',
     'DEFAULT_FIXED_POINT_FORMAT', 'FIXED_POINT_PRECISION', 'MEMORY_OPTIMIZATION',
@@ -110,7 +110,7 @@ __all__ = [
     'MemoryAllocationError', 'FileNotFoundError', 'ConfigParseError',
     'ActivationFunctionNotImplementedError', 'HardwareNotSupportedError',
     'OptimizationTimeoutError', 'BenchmarkError', 'handle_exception',
-    'validate_tensor_shape', 'validate_dtype', 'validate_point_count',
+    'validate_tensor_shape', 'validate_dtype', 'validate_bitlen',
     
     # 日志
     'FPT25Logger', 'PerformanceLogger', 'AccuracyLogger', 'get_logger',

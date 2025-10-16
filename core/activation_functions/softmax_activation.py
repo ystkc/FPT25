@@ -3,6 +3,7 @@ Softmax 激活函数模块
 实现高效的 Softmax 激活函数，支持查找表优化和硬件加速
 """
 
+import traceback
 import torch
 import math
 from typing import Union, Optional, Dict, Any, Tuple
@@ -28,7 +29,7 @@ from core.utils.memory_pool import get_memory_manager, memory_context
 class SoftmaxConfig:
     """Softmax 配置"""
     use_lookup_table: bool = True
-    lookup_table_size: int = 2000  # 增加查找表大小
+    lookup_table_bitlen: int = 14  # 增加查找表大小
     interpolation_method: str = 'quadratic'  # 使用二次插值
     use_fixed_point: bool = False
     fixed_point_format: str = 'Q16_16'
@@ -67,12 +68,13 @@ class SoftmaxActivation:
         try:
             self.lookup_table = create_exp_table(
                 name="softmax_exp",
-                point_count=self.config.lookup_table_size,
+                bit_len=self.config.lookup_table_bitlen,
                 interpolation_method=self.config.interpolation_method
             )
-            self.logger.info(f"Softmax 查找表初始化完成: {self.config.lookup_table_size} 点")
+            self.logger.info(f"Softmax 查找表初始化完成: {self.config.lookup_table_bitlen} 点")
         except Exception as e:
             self.logger.warning(f"查找表初始化失败，将使用直接计算: {e}")
+            traceback.print_exc()
             self.lookup_table = None
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -240,7 +242,7 @@ class SoftmaxActivation:
         """获取配置信息"""
         return {
             'use_lookup_table': self.config.use_lookup_table,
-            'lookup_table_size': self.config.lookup_table_size,
+            'lookup_bit_len': self.config.lookup_table_bitlen,
             'interpolation_method': self.config.interpolation_method,
             'use_fixed_point': self.config.use_fixed_point,
             'fixed_point_format': self.config.fixed_point_format,
@@ -379,18 +381,18 @@ class SoftmaxOptimizer:
     def __init__(self):
         self.logger = get_logger()
     
-    def optimize_lookup_table_size(self, input_shape: tuple = TENSOR_SHAPE,
-                                 point_counts: list = None) -> Dict[str, Any]:
+    def optimize_lookup_bit_len(self, input_shape: tuple = TENSOR_SHAPE,
+                                 bit_lens: list = None) -> Dict[str, Any]:
         """优化查找表大小"""
-        if point_counts is None:
-            point_counts = [400, 600, 800, 1000]
+        if bit_lens is None:
+            bit_lens = [400, 600, 800, 1000]
         
         results = []
         
-        for point_count in point_counts:
+        for bit_len in bit_lens:
             config = SoftmaxConfig(
                 use_lookup_table=True,
-                lookup_table_size=point_count,
+                lookup_table_bitlen=bit_len,
                 interpolation_method='linear'
             )
             
@@ -401,7 +403,7 @@ class SoftmaxOptimizer:
             accuracy_result = softmax.accuracy_test()
             
             results.append({
-                'point_count': point_count,
+                'bit_len': bit_len,
                 'average_time': benchmark_result['results'][0]['average_time'],
                 'l2_error': accuracy_result['l2_error']
             })
@@ -411,7 +413,7 @@ class SoftmaxOptimizer:
         
         return {
             'results': results,
-            'best_point_count': best_result['point_count'],
+            'best_bit_len': best_result['bit_len'],
             'best_l2_error': best_result['l2_error'],
             'best_time': best_result['average_time']
         }
@@ -423,7 +425,7 @@ class SoftmaxOptimizer:
         for method in INTERPOLATION_METHODS:
             config = SoftmaxConfig(
                 use_lookup_table=True,
-                lookup_table_size=800,
+                lookup_table_bitlen=800,
                 interpolation_method=method
             )
             
@@ -460,12 +462,12 @@ def create_softmax(config: Optional[SoftmaxConfig] = None) -> SoftmaxActivation:
 
 def softmax_forward(x: torch.Tensor, 
                    use_lookup_table: bool = True,
-                   lookup_table_size: int = 800,
+                   lookup_bit_len: int = 800,
                    interpolation_method: str = 'linear') -> torch.Tensor:
     """Softmax 前向传播便捷函数"""
     config = SoftmaxConfig(
         use_lookup_table=use_lookup_table,
-        lookup_table_size=lookup_table_size,
+        lookup_table_bitlen=lookup_bit_len,
         interpolation_method=interpolation_method
     )
     
