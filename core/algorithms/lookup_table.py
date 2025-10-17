@@ -44,6 +44,7 @@ class LookupTableConfig:
         self.x_struct_min = torch.tensor(self.x_struct_min_int, dtype=self.unsigned_type)
         self.x_struct_max = torch.tensor(self.x_struct_max_int, dtype=self.unsigned_type)
         self.unsigned_mask = (1 << self.dtype_len) - 1  # 无符号掩码
+        self.zero_len = self.dtype_len - self.bit_len  # 零位长度
 
 
 class SamplingStrategy(ABC):
@@ -336,6 +337,8 @@ class LookupTable:
         # 初始化采样策略和插值方法
         self._init_sampling_strategy()
         self._init_interpolation_method()
+
+        # self.sample = 9
     
     def _validate_config(self) -> None:
         """验证配置参数"""
@@ -409,8 +412,6 @@ class LookupTable:
         self.y_points = []
         
         # 使用位操作生成查找表
-        point_count = 1 << self.config.bit_len
-        zero_len = self.config.dtype_len - self.config.bit_len
 
         # def logical_right_shift(x_struct: torch.Tensor, shift: int, unsigned_type=torch.uint16):
         #     '''x_struct是unsigned_type类型，返回值unsigned_type类型'''
@@ -420,23 +421,19 @@ class LookupTable:
         #     '''x_struct是unsigned_type类型，返回值unsigned_type类型'''
         #     return (x_struct.int() << shift).to(unsigned_type)
 
-        startX = self.config.x_struct_min_int >> zero_len # python内置int，不会出现负数影响位运算
-        endX = self.config.x_struct_max_int >> zero_len
+        startX = self.config.x_struct_min_int # python内置int，不会出现负数影响位运算
+        endX = self.config.x_struct_max_int
+        step = 1 << (self.config.zero_len)
+        
 
-        for x in range(startX, endX + 1):
-            x_target_type = torch.tensor((x << zero_len) & self.config.unsigned_mask, dtype=self.config.unsigned_type).view(self.config.dtype) # 从LSB截断为unsigned_type，再转换为dtype
+        for x in range(startX, endX, step):
+            x_target_type = torch.tensor(x & self.config.unsigned_mask, dtype=self.config.unsigned_type).view(self.config.dtype) # 从LSB截断为unsigned_type，再转换为dtype
             y_target_type = self.function(x_target_type)
-            # 如果发现NaN或者infinity，则退出
-            if torch.isnan(y_target_type) or torch.isinf(y_target_type):
-                break
             self.x_points.append(x_target_type.item())
             self.y_points.append(y_target_type.item())
 
         self.x_points = np.array(self.x_points)
         self.y_points = np.array(self.y_points)
-
-        # 检查数值稳定性
-        self._check_stability()
         
         # 缓存结果
         table_data = {
@@ -445,73 +442,33 @@ class LookupTable:
         }
         self.cache.set_table(self._config_hash, table_data)
     
-    def _check_stability(self) -> None:
-        """检查数值稳定性"""
-        if np.any(np.isnan(self.y_points)):
-            raise ValueError("查找表包含 NaN 值")
-        
-        if np.any(np.isinf(self.y_points)):
-            raise ValueError("查找表包含无穷大值")
-    
     def lookup(self, x: Union[float, torch.Tensor]) -> Union[float, torch.Tensor]:
-        """查找表查询"""
+        """查找表查询，分类float还是tensor，如果是float则转换为tensor，如果是tensor则进行递归展开"""
         if self.x_points is None or self.y_points is None:
             raise ValueError("查找表未初始化，请先调用 generate_table()")
         
         if isinstance(x, torch.Tensor):
-            return self._lookup_tensor(x)
+            init_dtype = x.dtype
+            return torch.tensor(self._lookup_tensor(x.to(self.config.dtype)), dtype=init_dtype)
         else:
+            return self._lookup_scalar(torch.tensor(x, dtype=self.config.dtype)).item()
+
+    def _lookup_tensor(self, x: torch.Tensor) -> list:
+        """张量查找，返回为多维数组，在最外层再tensor化"""
+        if len(x.shape) == 0:
             return self._lookup_scalar(x)
+        return [self._lookup_tensor(x_i) for x_i in x]
     
-    def _lookup_scalar(self, x: float) -> float:
-        """标量查找 - 使用位操作"""
-        from core.hardware.fixed_point import FixedPointNumber, FixedPointConfig
+    def _lookup_scalar(self, x: torch.Tensor) -> float:
+        """标量查找，tensor中只有1个元素"""
+        x_struct = x.view(self.config.unsigned_type).int() >> (self.config.zero_len)
+        result = self.y_points[x_struct]  # 截断位数直接算出地址，无需查表
+        result_x = self.x_points[x_struct]
         
-        # 创建16位定点数配置
-        fp_config = FixedPointConfig(
-            integer_bits=8,
-            fractional_bits=8,
-            signed=True,
-            rounding_mode='round'
-        )
-        
-        # 将输入转换为16位定点数
-        fp_x = FixedPointNumber(x, fp_config)
-        
-        # 截取高12位作为索引
-        index = (fp_x.to_int() >> 4) & ((1 << self.config.bit_len) - 1)
-        
-        # 确保索引在有效范围内
-        index = min(max(0, index), len(self.y_points) - 1)
-        
-        # 返回查找结果
-        return float(self.y_points[index])
-    
-    def _lookup_tensor(self, x: torch.Tensor) -> torch.Tensor:
-        """张量查找 - 使用位操作"""
-        from core.hardware.fixed_point import FixedPointTensor, FixedPointConfig
-        
-        # 创建16位定点数配置
-        fp_config = FixedPointConfig(
-            integer_bits=8,
-            fractional_bits=8,
-            signed=True,
-            rounding_mode='round'
-        )
-        
-        # 将输入张量转换为16位定点数
-        fp_x = FixedPointTensor(x, fp_config)
-        int_values = fp_x.to_int_tensor()
-        
-        # 截取高12位作为索引
-        indices = (int_values >> 4) & ((1 << self.config.bit_len) - 1)
-        
-        # 确保索引在有效范围内
-        indices = torch.clamp(indices, 0, len(self.y_points) - 1)
-        
-        # 使用索引查找结果
-        y_points_tensor = torch.tensor(self.y_points, dtype=x.dtype, device=x.device)
-        return y_points_tensor[indices]
+        # if self.sample > 0:
+        #     self.sample -= 1
+        #     print("x=", x, "x_struct=", x_struct, "result=", result, "result_X=", result_x, "standard_result=", self.function(x))
+        return result
     
     def _vectorized_linear_interpolation(self, x: torch.Tensor) -> torch.Tensor:
         """向量化线性插值"""
@@ -576,12 +533,13 @@ class LookupTable:
     
     def _fallback_elementwise_lookup(self, x: torch.Tensor) -> torch.Tensor:
         """回退的逐元素查找"""
+        print("Fallback to elementwise lookup")
         result = torch.zeros_like(x)
         flat_x = x.view(-1)
         flat_result = result.view(-1)
         
         for i in range(x.numel()):
-            flat_result[i] = self._lookup_scalar(flat_x[i].item())
+            flat_result[i] = self._lookup_scalar(flat_x[i])
         
         return result
     

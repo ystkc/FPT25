@@ -29,7 +29,7 @@ from core.utils.memory_pool import get_memory_manager, memory_context
 class SoftmaxConfig:
     """Softmax 配置"""
     use_lookup_table: bool = True
-    lookup_table_bitlen: int = 14  # 增加查找表大小
+    lookup_table_bitlen: int = 16  # 增加查找表大小
     interpolation_method: str = 'quadratic'  # 使用二次插值
     use_fixed_point: bool = False
     fixed_point_format: str = 'Q16_16'
@@ -71,7 +71,7 @@ class SoftmaxActivation:
                 bit_len=self.config.lookup_table_bitlen,
                 interpolation_method=self.config.interpolation_method
             )
-            self.logger.info(f"Softmax 查找表初始化完成: {self.config.lookup_table_bitlen} 点")
+            self.logger.info(f"Softmax 查找表初始化完成: {self.config.lookup_table_bitlen} 位共 {len(self.lookup_table.y_points)}")
         except Exception as e:
             self.logger.warning(f"查找表初始化失败，将使用直接计算: {e}")
             traceback.print_exc()
