@@ -18,8 +18,13 @@ BATCH_SIZE: int = 16  # 批处理大小
 # 数据类型
 SUPPORTED_DTYPES: List[str] = ['float32', 'bfloat16']
 DEFAULT_DTYPE: str = 'bfloat16'
+DEFAULT_COMPUTE_DTYPE: str = 'float32'
 DEFAULT_UNSIGNED_TYPE: str = 'uint16'
 DEFAULT_DTYPE_LEN: int = 16
+
+# 二进制寻址上下限(16位数据类型)
+DEFAULT_X_STRUCT_MIN_INT = 0x0000
+DEFAULT_X_STRUCT_MAX_INT = 0xFFFF
 
 # 数据映射(将str映射到dtype)
 DATA_TYPE_MAP: Dict[str, torch.dtype] = {

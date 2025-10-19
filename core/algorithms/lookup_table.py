@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from core.base.constants import (
-    TABLE_THRESH, BIT_LEN_RANGE, INTERPOLATION_METHODS,
+    DEFAULT_X_STRUCT_MAX_INT, DEFAULT_X_STRUCT_MIN_INT, TABLE_THRESH, BIT_LEN_RANGE, INTERPOLATION_METHODS,
     SAMPLING_STRATEGIES, NUMERICAL_STABILITY, EPSILON_TINY,
     DEFAULT_BIT_LEN, DEFAULT_DTYPE, DEFAULT_DTYPE_LEN, DEFAULT_UNSIGNED_TYPE, DEFAULT_INTERPOLATION,
     DEFAULT_SAMPLING_STRATEGY, DEFAULT_FIXED_POINT_FORMAT, DATA_TYPE_MAP
@@ -20,31 +20,11 @@ from core.base.exceptions import (
     InvalidPointCountError, InvalidInterpolationMethodError,
     validate_bitlen, validate_dtype
 )
-from core.algorithms.math_utils import MathUtils
 from core.utils.smart_cache import get_lookup_table_cache
+from config.config import LookupTableConfig
 
 
-@dataclass
-class LookupTableConfig:
-    """查找表配置"""
-    
-    bit_len: int = DEFAULT_BIT_LEN # 查找表位长度，默认12位
-    dtype: torch.dtype = DATA_TYPE_MAP[DEFAULT_DTYPE] # 查找表数据类型，默认bfloat16
-    unsigned_type: torch.dtype = DATA_TYPE_MAP[DEFAULT_UNSIGNED_TYPE]  # 无符号数据类型，和dtype位宽相同
-    dtype_len: int = DEFAULT_DTYPE_LEN  # 数据类型位长，默认16位
-    interpolation_method: str = DEFAULT_INTERPOLATION  # 默认使用二次插值
-    sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY  # 默认使用自适应采样
-    use_advanced_lookup: bool = False
-    x_struct_min_int: int = 0x0000 # 使用int初始化，在后初始化中转换为dtype类型
-    x_struct_max_int: int = 0xffff
-    function_type: str = 'exp'
 
-    def __post_init__(self):
-        '''将x_struct_min、x_struct_max转换为dtype类型'''
-        self.x_struct_min = torch.tensor(self.x_struct_min_int, dtype=self.unsigned_type)
-        self.x_struct_max = torch.tensor(self.x_struct_max_int, dtype=self.unsigned_type)
-        self.unsigned_mask = (1 << self.dtype_len) - 1  # 无符号掩码
-        self.zero_len = self.dtype_len - self.bit_len  # 零位长度
 
 
 class SamplingStrategy(ABC):
@@ -360,7 +340,7 @@ class LookupTable:
     def _generate_config_hash(self) -> str:
         """生成配置哈希"""
         import hashlib
-        config_str = f"{self.config.bit_len}_{self.config.interpolation_method}_{self.config.sampling_strategy}_{self.config.x_struct_min}_{self.config.x_struct_max}_{self.config.function_type}_{self.config.bit_len}"
+        config_str = f"{self.config.bit_len}_{self.config.interpolation_method}_{self.config.sampling_strategy}_{self.config.x_struct_min}_{self.config.x_struct_max}_{self.config.table_name}_{self.config.bit_len}"
         return hashlib.md5(config_str.encode()).hexdigest()
     
     def _init_sampling_strategy(self) -> None:
@@ -463,7 +443,7 @@ class LookupTable:
         """标量查找，tensor中只有1个元素"""
         x_struct = x.view(self.config.unsigned_type).int() >> (self.config.zero_len)
         result = self.y_points[x_struct]  # 截断位数直接算出地址，无需查表
-        result_x = self.x_points[x_struct]
+        # result_x = self.x_points[x_struct]
         
         # if self.sample > 0:
         #     self.sample -= 1
@@ -573,7 +553,7 @@ class LookupTable:
             'interpolation_method': self.config.interpolation_method,
             'sampling_strategy': self.config.sampling_strategy,
             'x_range': (self.config.x_struct_min, self.config.x_struct_max),
-            'function_type': self.config.function_type,
+            'table_name': self.config.table_name,
             'x_points': self.x_points.tolist() if self.x_points is not None else None,
             'y_points': self.y_points.tolist() if self.y_points is not None else None
         }
@@ -590,7 +570,7 @@ class LookupTable:
                 'sampling_strategy': self.config.sampling_strategy,
                 'x_struct_min': self.config.x_struct_min,
                 'x_struct_max': self.config.x_struct_max,
-                'function_type': self.config.function_type,
+                'table_name': self.config.table_name,
                 'bit_len': self.config.bit_len
             },
             'x_points': self.x_points.tolist() if self.x_points is not None else None,
@@ -619,111 +599,45 @@ class LookupTable:
         self._init_sampling_strategy()
         self._init_interpolation_method()
 
+# 快捷函数
 
-class ExpLookupTable(LookupTable):
-    """指数函数查找表"""
-    
-    def __init__(self, bit_len: int = 15, 
-                 interpolation_method: str = 'quadratic',
-                 sampling_strategy: str = 'adaptive',
-                 x_struct_min_int: int = 0x0000,  # 扩大范围以覆盖Softmax的实际输入范围
-                 x_struct_max_int: int = 0xffff):   # 调整上界，因为Softmax中减去最大值后通常为负值
-        config = LookupTableConfig(
-            bit_len=bit_len,
-            interpolation_method=interpolation_method,
-            sampling_strategy=sampling_strategy,
-            x_struct_min_int=x_struct_min_int,
-            x_struct_max_int=x_struct_max_int,
-            function_type='exp'
-        )
-        super().__init__(config)
-        
-        # 生成指数函数查找表
-        self.generate_table(MathUtils.safe_exp)
-    
-    def lookup_exp(self, x: Union[float, torch.Tensor]) -> Union[float, torch.Tensor]:
-        """查找指数函数值"""
-        return self.lookup(x)
-
-
-class SigmoidLookupTable(LookupTable):
-    """Sigmoid 函数查找表"""
-    
-    def __init__(self, bit_len: int = 15,
-                 interpolation_method: str = 'linear',
-                 sampling_strategy: str = 'uniform',
-                 x_struct_min_int: torch.Tensor = -10.0,
-                 x_struct_max_int: torch.Tensor = 10.0):
-        config = LookupTableConfig(
-            bit_len=bit_len,
-            interpolation_method=interpolation_method,
-            sampling_strategy=sampling_strategy,
-            x_struct_min_int=x_struct_min_int,
-            x_struct_max_int=x_struct_max_int,
-            function_type='sigmoid'
-        )
-        super().__init__(config)
-        
-        # 生成 Sigmoid 函数查找表
-        self.generate_table(MathUtils.sigmoid_stable)
-    
-    def lookup_sigmoid(self, x: Union[float, torch.Tensor]) -> Union[float, torch.Tensor]:
-        """查找 Sigmoid 函数值"""
-        return self.lookup(x)
-
-
-class LookupTableManager:
-    """查找表管理器"""
-    
-    def __init__(self):
-        self.tables: Dict[str, LookupTable] = {}
-    
-    def create_table(self, name: str, table_type: str, **kwargs) -> LookupTable:
-        """创建查找表"""
-        if table_type == 'exp':
-            table = ExpLookupTable(**kwargs)
-        elif table_type == 'sigmoid':
-            table = SigmoidLookupTable(**kwargs)
-        else:
-            raise ValueError(f"不支持的查找表类型: {table_type}")
-        
-        self.tables[name] = table
-        return table
-    
-    def get_table(self, name: str) -> LookupTable:
-        """获取查找表"""
-        if name not in self.tables:
-            raise KeyError(f"查找表不存在: {name}")
-        return self.tables[name]
-    
-    def remove_table(self, name: str) -> None:
-        """移除查找表"""
-        if name in self.tables:
-            del self.tables[name]
-    
-    def list_tables(self) -> List[str]:
-        """列出所有查找表"""
-        return list(self.tables.keys())
-    
-    def clear_tables(self) -> None:
-        """清空所有查找表"""
-        self.tables.clear()
-
-
-# 全局查找表管理器
-_table_manager = LookupTableManager()
-
-
-def get_table_manager() -> LookupTableManager:
-    """获取全局查找表管理器"""
-    return _table_manager
-
-
-def create_exp_table(name: str = "default_exp", **kwargs) -> ExpLookupTable:
+def create_exp_table(table_name: str = "default_exp",
+                     bit_len: int = DEFAULT_BIT_LEN,
+                     interpolation_method = DEFAULT_INTERPOLATION,
+                     sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY,
+                     x_struct_min_int: int = DEFAULT_X_STRUCT_MIN_INT,
+                     x_struct_max_int: int = DEFAULT_X_STRUCT_MAX_INT,
+                     ) -> LookupTable:
     """创建指数函数查找表"""
-    return _table_manager.create_table(name, 'exp', **kwargs)
 
+    config = LookupTableConfig(
+        bit_len=bit_len,
+        interpolation_method=interpolation_method,
+        sampling_strategy=sampling_strategy,
+        x_struct_min_int=x_struct_min_int,
+        x_struct_max_int=x_struct_max_int,
+        table_name=table_name
+    )
+    tbl = LookupTable(config)
+    tbl.generate_table(torch.exp)
+    return tbl
 
-def create_sigmoid_table(name: str = "default_sigmoid", **kwargs) -> SigmoidLookupTable:
+def create_sigmoid_table(table_name: str = "default_sigmoid",
+                         bit_len: int = DEFAULT_BIT_LEN,
+                         interpolation_method = DEFAULT_INTERPOLATION,
+                         sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY,
+                         x_struct_min_int: int = DEFAULT_X_STRUCT_MIN_INT,
+                         x_struct_max_int: int = DEFAULT_X_STRUCT_MAX_INT,
+                         ) -> LookupTable:
     """创建 Sigmoid 函数查找表"""
-    return _table_manager.create_table(name, 'sigmoid', **kwargs)
+    config = LookupTableConfig(
+        bit_len=bit_len,
+        interpolation_method=interpolation_method,
+        sampling_strategy=sampling_strategy,
+        x_struct_min_int=x_struct_min_int,
+        x_struct_max_int=x_struct_max_int,
+        table_name=table_name
+    )
+    tbl = LookupTable(config)
+    tbl.generate_table(torch.sigmoid)
+    return tbl

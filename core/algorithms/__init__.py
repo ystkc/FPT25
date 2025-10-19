@@ -23,10 +23,6 @@ from .lookup_table import (
     LinearInterpolation,
     QuadraticInterpolation,
     LookupTable,
-    ExpLookupTable,
-    SigmoidLookupTable,
-    LookupTableManager,
-    get_table_manager,
     create_exp_table,
     create_sigmoid_table
 )

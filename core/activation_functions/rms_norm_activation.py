@@ -13,13 +13,8 @@ from core.base.constants import EPSILON_TINY
 from core.algorithms import MathUtils
 from core.base.logs import get_logger
 
+from config.config import RMSNormConfig
 
-@dataclass
-class RMSNormConfig(ActivationConfig):
-    """RMSNorm 配置"""
-    eps: float = 1e-5
-    use_learnable_params: bool = True
-    gamma_init: float = 1.0
 
 
 class RMSNormActivation(BaseActivationFunction):

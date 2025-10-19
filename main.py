@@ -7,22 +7,22 @@ import argparse
 import sys
 import time
 import torch
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from pathlib import Path
+
+from core.base.logs import setup_logging, get_logger
+from core.base.constants import ACTIVATION_FUNCTIONS, TENSOR_SHAPE, BATCH_SIZE
+from core.activation_functions import ActivationFunctionManager, get_activation_manager, create_activation_function
+from evaluation import get_accuracy_evaluator, get_benchmark_runner, get_test_suite
+from config import get_config_manager, get_config
+from utils import get_result_manager, generate_excel_report, generate_benchmark_excel_report, plot_performance_trends, plot_benchmark_results, save_benchmark_json_report
 
 # 添加项目根目录到 Python 路径
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# 修复相对导入问题 - 延迟导入避免循环依赖
 def _import_modules():
     """延迟导入模块以避免循环依赖"""
-    from core.base.logs import setup_logging, get_logger
-    from core.base.constants import ACTIVATION_FUNCTIONS, TENSOR_SHAPE, BATCH_SIZE
-    from core.activation_functions import get_activation_manager, create_activation_function
-    from evaluation import get_accuracy_evaluator, get_benchmark_runner, get_test_suite
-    from config import get_config_manager, get_config
-    from utils import get_result_manager, generate_excel_report, generate_benchmark_excel_report, plot_performance_trends, plot_benchmark_results, save_benchmark_json_report
     
     return {
         'setup_logging': setup_logging,
@@ -64,7 +64,7 @@ class FPT25Main:
         self.logger = modules['get_logger']()
         self.config_manager = modules['get_config_manager']()
         self.config = modules['get_config']()
-        self.activation_manager = modules['get_activation_manager']()
+        self.activation_manager: ActivationFunctionManager = modules['get_activation_manager']()
         self.accuracy_evaluator = modules['get_accuracy_evaluator']()
         self.benchmark_runner = modules['get_benchmark_runner']()
         self.test_suite = modules['get_test_suite']()

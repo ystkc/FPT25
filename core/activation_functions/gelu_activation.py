@@ -12,12 +12,8 @@ from core.activation_functions.activation_manager import BaseActivationFunction,
 from core.algorithms import MathUtils
 from core.base.logs import get_logger
 
+from config.config import GELUConfig
 
-@dataclass
-class GELUConfig(ActivationConfig):
-    """GELU 配置"""
-    use_approximation: bool = True
-    approximation_type: str = 'tanh'  # 'tanh' or 'erf'
 
 
 class GELUActivation(BaseActivationFunction):

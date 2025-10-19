@@ -3,122 +3,37 @@
 统一管理所有激活函数的创建、调用和优化
 """
 
+import math
+import time
 import traceback
 import torch
-from typing import Dict, List, Optional, Any, Union, Callable
+from typing import Dict, List, Optional, Any, Tuple, Union, Callable
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from core.base.constants import ACTIVATION_FUNCTIONS, ACTIVATION_FUNCTION_WEIGHTS
+from config.config import ActivationConfig
+from core.algorithms.lookup_table import LookupTable, create_exp_table
+from core.base.constants import ACTIVATION_FUNCTIONS, ACTIVATION_FUNCTION_WEIGHTS, DEFAULT_DTYPE, INTERPOLATION_METHODS, TENSOR_SHAPE
 from core.base.exceptions import ActivationFunctionNotImplementedError
 from core.base.logs import get_logger, get_performance_logger
-from core.activation_functions.softmax_activation import SoftmaxActivation, SoftmaxConfig
+from core.optimization import get_performance_profiler, performance_monitoring
+from core.utils.data_type_manager import get_data_type_manager, ensure_dtype, safe_bf16_operation
+from core.utils.memory_pool import MemoryContext, get_memory_manager, memory_context
+from core.base.exceptions import (
+    InvalidTensorShapeError, UnsupportedDataTypeError,
+    validate_tensor_shape, validate_dtype
+)
+from config.config import SoftmaxConfig, LayerNormConfig, RMSNormConfig, SiLUConfig, GELUConfig, AddConfig, MultiplyConfig
+from core.activation_functions.base_activation import BaseActivationFunction
+from core.activation_functions.softmax_activation import SoftmaxActivation
+from core.activation_functions.layer_norm_activation import LayerNormActivation
+from core.activation_functions.rms_norm_activation import RMSNormActivation
+from core.activation_functions.silu_activation import SiLUActivation
+from core.activation_functions.gelu_activation import GELUActivation
+from core.activation_functions.add_activation import AddActivation
+from core.activation_functions.multiply_activation import MultiplyActivation
 
-
-@dataclass
-class ActivationConfig:
-    """激活函数配置基类"""
-    dtype: str = 'bfloat16'
-    use_fixed_point: bool = False
-    fixed_point_format: str = 'Q16_16'
-
-
-class BaseActivationFunction(ABC):
-    """激活函数基类"""
     
-    def __init__(self, config: ActivationConfig):
-        self.config = config
-        self.logger = get_logger()
-        self.performance_logger = get_performance_logger()
-    
-    @abstractmethod
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """前向传播"""
-        pass
-    
-    @abstractmethod
-    def backward(self, grad_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """反向传播"""
-        pass
-    
-    @abstractmethod
-    def get_config(self) -> Dict[str, Any]:
-        """获取配置信息"""
-        pass
-    
-    def benchmark(self, input_shapes: List[tuple] = None, 
-                 num_runs: int = 100) -> Dict[str, Any]:
-        """基准测试"""
-        if input_shapes is None:
-            input_shapes = [(64, 768)]
-        
-        results = {
-            'function_name': self.__class__.__name__.lower().replace('activation', ''),
-            'config': self.get_config(),
-            'input_shapes': input_shapes,
-            'num_runs': num_runs,
-            'results': []
-        }
-        
-        for shape in input_shapes:
-            # 创建测试数据
-            x = torch.randn(shape, dtype=getattr(torch, self.config.dtype))
-            
-            # 预热
-            for _ in range(10):
-                _ = self.forward(x)
-            
-            # 基准测试
-            import time
-            times = []
-            for _ in range(num_runs):
-                start_time = time.perf_counter()
-                _ = self.forward(x)
-                end_time = time.perf_counter()
-                times.append(end_time - start_time)
-            
-            # 计算统计信息
-            avg_time = sum(times) / len(times)
-            min_time = min(times)
-            max_time = max(times)
-            
-            results['results'].append({
-                'shape': shape,
-                'average_time': avg_time,
-                'min_time': min_time,
-                'max_time': max_time,
-                'throughput': 1.0 / avg_time if avg_time > 0 else 0
-            })
-        
-        return results
-    
-    def accuracy_test(self, reference_func: Optional[Callable] = None) -> Dict[str, Any]:
-        """精度测试"""
-        if reference_func is None:
-            raise NotImplementedError("需要提供参考函数")
-        
-        # 创建测试数据
-        x = torch.randn((64, 768), dtype=getattr(torch, self.config.dtype))
-        
-        # 计算结果
-        our_result = self.forward(x)
-        reference_result = reference_func(x)
-        
-        # 计算误差
-        mse = torch.mean((our_result - reference_result) ** 2)
-        mae = torch.mean(torch.abs(our_result - reference_result))
-        
-        # 计算相对 L2 误差
-        l2_error = torch.norm(our_result - reference_result, p=2) / (torch.norm(reference_result, p=2) + 1e-12)
-        
-        return {
-            'mse': mse.item(),
-            'mae': mae.item(),
-            'l2_error': l2_error.item(),
-            'max_error': torch.max(torch.abs(our_result - reference_result)).item()
-        }
-
-
 class ActivationFunctionManager:
     """激活函数管理器"""
     
@@ -131,14 +46,6 @@ class ActivationFunctionManager:
         """注册默认激活函数"""
         # 注册 Softmax
         self.register_function('softmax', SoftmaxActivation, SoftmaxConfig)
-        
-        # 注册其他激活函数
-        from .layer_norm_activation import LayerNormActivation, LayerNormConfig
-        from .rms_norm_activation import RMSNormActivation, RMSNormConfig
-        from .silu_activation import SiLUActivation, SiLUConfig
-        from .gelu_activation import GELUActivation, GELUConfig
-        from .add_activation import AddActivation, AddConfig
-        from .multiply_activation import MultiplyActivation, MultiplyConfig
         
         self.register_function('layer_norm', LayerNormActivation, LayerNormConfig)
         self.register_function('rms_norm', RMSNormActivation, RMSNormConfig)
@@ -262,7 +169,7 @@ class ActivationFunctionManager:
         
         return suggestions
 
-
+    
 # 全局激活函数管理器
 _activation_manager: Optional[ActivationFunctionManager] = None
 

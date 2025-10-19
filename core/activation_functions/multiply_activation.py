@@ -11,10 +11,7 @@ from core.activation_functions.activation_manager import BaseActivationFunction,
 from core.base.logs import get_logger
 
 
-@dataclass
-class MultiplyConfig(ActivationConfig):
-    """Multiply 配置"""
-    pass
+from config.config import MultiplyConfig
 
 
 class MultiplyActivation(BaseActivationFunction):

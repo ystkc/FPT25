@@ -38,7 +38,7 @@ class DataTypeManager:
         except (RuntimeError, TypeError):
             return False
     
-    def ensure_dtype(self, tensor: torch.Tensor, target_dtype: str) -> torch.Tensor:
+    def ensure_dtype(self, tensor: torch.Tensor, target_dtype_str: str) -> torch.Tensor:
         """
         确保张量具有目标数据类型
         
@@ -49,14 +49,14 @@ class DataTypeManager:
         Returns:
             转换后的张量
         """
-        validate_dtype(target_dtype, SUPPORTED_DTYPES)
+        validate_dtype(target_dtype_str, SUPPORTED_DTYPES)
         
-        if target_dtype == 'bfloat16':
+        if target_dtype_str == 'bfloat16':
             return self._ensure_bf16(tensor)
-        elif target_dtype == 'float32':
+        elif target_dtype_str == 'float32':
             return self._ensure_float32(tensor)
         else:
-            raise UnsupportedDataTypeError(target_dtype, SUPPORTED_DTYPES)
+            raise UnsupportedDataTypeError(target_dtype_str, SUPPORTED_DTYPES)
     
     def _ensure_bf16(self, tensor: torch.Tensor) -> torch.Tensor:
         """确保张量为bf16类型"""

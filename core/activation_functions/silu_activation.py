@@ -12,14 +12,7 @@ from core.activation_functions.activation_manager import BaseActivationFunction,
 from core.algorithms import MathUtils
 from core.base.logs import get_logger
 
-
-@dataclass
-class SiLUConfig(ActivationConfig):
-    """SiLU 配置"""
-    use_lookup_table: bool = True
-    lookup_bit_len: int = 800
-    interpolation_method: str = 'linear'
-
+from config.config import SiLUConfig
 
 class SiLUActivation(BaseActivationFunction):
     """SiLU 激活函数类"""

@@ -12,10 +12,14 @@ from .activation_manager import (
     benchmark_activation_functions
 )
 
+from .base_activation import (
+    BaseActivationFunction,
+    ActivationOptimizer
+)
+
 from .softmax_activation import (
     SoftmaxConfig,
     SoftmaxActivation,
-    SoftmaxOptimizer,
     create_softmax,
     softmax_forward,
     softmax_benchmark
@@ -56,8 +60,10 @@ __all__ = [
     'BaseActivationFunction', 'ActivationConfig', 'ActivationFunctionManager',
     'get_activation_manager', 'create_activation_function', 'benchmark_activation_functions',
     
+    'BaseActivationFunction', 'ActivationOptimizer',
+    
     # Softmax
-    'SoftmaxConfig', 'SoftmaxActivation', 'SoftmaxOptimizer',
+    'SoftmaxConfig', 'SoftmaxActivation',
     'create_softmax', 'softmax_forward', 'softmax_benchmark',
     
     # LayerNorm

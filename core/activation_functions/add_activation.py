@@ -11,11 +11,7 @@ from core.activation_functions.activation_manager import BaseActivationFunction,
 from core.base.logs import get_logger
 
 
-@dataclass
-class AddConfig(ActivationConfig):
-    """Add 配置"""
-    pass
-
+from config.config import AddConfig
 
 class AddActivation(BaseActivationFunction):
     """Add 激活函数类"""

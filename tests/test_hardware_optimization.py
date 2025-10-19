@@ -58,7 +58,7 @@ class TestHardwareOptimization:
     def test_lookup_table_generation(self):
         """测试查找表生成"""
         # 测试指数查找表
-        exp_table = create_exp_table(name="test_exp", bit_len=100)
+        exp_table = create_exp_table(table_name="test_exp", bit_len=100)
         assert exp_table is not None
         
         # 测试 Sigmoid 查找表

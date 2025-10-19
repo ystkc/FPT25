@@ -10,31 +10,102 @@ from typing import Dict, Any, Optional, Union, List
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+import torch
+
 from core.base.constants import (
-    TENSOR_SHAPE, BATCH_SIZE, DEFAULT_DTYPE, DEFAULT_BIT_LEN,
+    DATA_TYPE_MAP, DEFAULT_DTYPE_LEN, DEFAULT_UNSIGNED_TYPE, TENSOR_SHAPE, BATCH_SIZE, DEFAULT_DTYPE, DEFAULT_COMPUTE_DTYPE, DEFAULT_BIT_LEN,
     DEFAULT_INTERPOLATION, DEFAULT_SAMPLING_STRATEGY, ACTIVATION_FUNCTIONS,
     FIXED_POINT_FORMATS, DEFAULT_FIXED_POINT_FORMAT, OUTPUT_DIRS
 )
 from core.base.exceptions import ConfigParseError, FileNotFoundError
-from core.algorithms.lookup_table import LookupTableConfig
-from core.activation_functions.softmax_activation import SoftmaxConfig
-from core.activation_functions.layer_norm_activation import LayerNormConfig
-from core.activation_functions.rms_norm_activation import RMSNormConfig
-from core.activation_functions.silu_activation import SiLUConfig
-from core.activation_functions.gelu_activation import GELUConfig
-from core.activation_functions.add_activation import AddConfig
-from core.activation_functions.multiply_activation import MultiplyConfig
 from core.base.logs import get_logger
 
 
 @dataclass
+class ActivationConfig:
+    """激活函数配置基类"""
+    dtype_str: str = DEFAULT_DTYPE
+    compute_dtype_str: str = DEFAULT_COMPUTE_DTYPE
+    use_lookup_table: bool = True
+    lookup_table_bitlen: int = 16  # 增加查找表大小
+
+    interpolation_method: str = 'quadratic'  # 使用二次插值
+    
+    use_fixed_point: bool = False
+    fixed_point_format: str = 'Q16_16'
+
+    def __post_init__(self):
+        """初始化后处理，将json配置的字符串转换为dtype"""
+        self.dtype = DATA_TYPE_MAP[self.dtype_str]
+        self.compute_dtype = DATA_TYPE_MAP[self.compute_dtype_str]
+
+@dataclass
 class LookupTableConfig:
     """查找表配置"""
-    bit_len: int = DEFAULT_BIT_LEN
-    dtype: str = DEFAULT_DTYPE
-    interpolation_method: str = DEFAULT_INTERPOLATION
-    sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY
+    
+    bit_len: int = DEFAULT_BIT_LEN # 查找表位长度，默认12位
+    dtype_str: str = DEFAULT_DTYPE  # 查找表数据类型，默认bfloat16
+    unsigned_type_str: str = DEFAULT_UNSIGNED_TYPE  # 无符号数据类型，和dtype位宽相同
+    dtype_len: int = DEFAULT_DTYPE_LEN  # 数据类型位长，默认16位
+    interpolation_method: str = DEFAULT_INTERPOLATION  # 默认使用二次插值
+    sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY  # 默认使用自适应采样
     use_advanced_lookup: bool = False
+    x_struct_min_int: int = 0x0000 # 使用int初始化，在后初始化中转换为dtype类型
+    x_struct_max_int: int = 0xffff
+    table_name: str = 'exp'
+
+    def __post_init__(self):
+        '''将x_struct_min、x_struct_max转换为dtype类型'''
+        self.dtype = DATA_TYPE_MAP[self.dtype_str]
+        self.unsigned_type = DATA_TYPE_MAP[self.unsigned_type_str]
+        self.x_struct_min = torch.tensor(self.x_struct_min_int, dtype=self.unsigned_type)
+        self.x_struct_max = torch.tensor(self.x_struct_max_int, dtype=self.unsigned_type)
+        self.unsigned_mask = (1 << self.dtype_len) - 1  # 无符号掩码
+        self.zero_len = self.dtype_len - self.bit_len  # 零位长度
+
+
+@dataclass
+class SoftmaxConfig(ActivationConfig):
+    """Softmax 配置"""
+
+@dataclass
+class LayerNormConfig(ActivationConfig):
+    """LayerNorm 配置"""
+    eps: float = 1e-5
+    use_learnable_params: bool = True
+    gamma_init: float = 1.0
+    beta_init: float = 0.0
+@dataclass
+class RMSNormConfig(ActivationConfig):
+    """RMSNorm 配置"""
+    eps: float = 1e-5
+    use_learnable_params: bool = True
+    gamma_init: float = 1.0
+
+@dataclass
+class SiLUConfig(ActivationConfig):
+    """SiLU 配置"""
+    use_lookup_table: bool = True
+    lookup_bit_len: int = 800
+    interpolation_method: str = 'linear'
+
+@dataclass
+class GELUConfig(ActivationConfig):
+    """GELU 配置"""
+    use_approximation: bool = True
+    approximation_type: str = 'tanh'  # 'tanh' or 'erf'
+
+@dataclass
+class AddConfig(ActivationConfig):
+    """Add 配置"""
+    pass
+
+@dataclass
+class MultiplyConfig(ActivationConfig):
+    """Multiply 配置"""
+    pass
+
+
 
 
 @dataclass
@@ -84,7 +155,6 @@ class ActivationFunctions:
     gelu: GELUConfig = None
     add: AddConfig = None
     multiply: MultiplyConfig = None
-
 
 @dataclass
 class ProjectConfig:
