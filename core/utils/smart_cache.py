@@ -4,6 +4,8 @@
 """
 
 import hashlib
+import pickle
+import httpx
 import time
 import threading
 from typing import Dict, Any, Optional, Callable, Union, Tuple
@@ -310,26 +312,33 @@ class LookupTableCache:
     """查找表专用缓存"""
     
     def __init__(self):
-        self.cache = SmartCache(max_size=50, max_memory_mb=200)  # 200MB
+        # self.cache = SmartCache(max_size=50, max_memory_mb=200)  # 200MB
         self.logger = get_logger()
+        # 检测localhost:8000是否可用
+        try:
+            httpx.get("http://localhost:8000")
+        except:
+            self.logger.warning("查找表缓存服务未启动，请先启动服务")
     
     def get_table(self, config_hash: str) -> Optional[Any]:
         """获取查找表"""
-        return self.cache.get(f"lookup_table_{config_hash}")
+        try:
+            response = httpx.get(f"http://localhost:8000/?hash_key={config_hash}")
+            rep = pickle.loads(response.content)
+            self.logger.info(f"获取查找表: {config_hash} ({len(response.content)}bytes)")
+            return rep
+        except:
+            return None
+        # return self.cache.get(f"lookup_table_{config_hash}")
     
     def set_table(self, config_hash: str, table: Any) -> None:
         """设置查找表"""
-        self.cache.set(f"lookup_table_{config_hash}", table)
-    
-    def get_or_create_table(self, config_hash: str, create_func: Callable[[], Any]) -> Any:
-        """获取或创建查找表"""
-        table = self.get_table(config_hash)
-        if table is not None:
-            return table
-        
-        table = create_func()
-        self.set_table(config_hash, table)
-        return table
+        try:
+            response = httpx.post(f"http://localhost:8000/?hash_key={config_hash}", data=pickle.dumps(table, protocol=5), headers={"Content-Type": "application/octet-stream"})
+            self.logger.info(f"设置查找表: {config_hash} {response.text}")
+        except:
+            self.logger.warning("查找表缓存服务未启动，请先启动服务")
+            raise
 
 
 # 全局缓存实例

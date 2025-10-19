@@ -13,50 +13,48 @@ from core.algorithms import MathUtils
 from core.base.logs import get_logger
 
 from config.config import SiLUConfig
+from core.utils.memory_pool import MemoryContext
 
 class SiLUActivation(BaseActivationFunction):
     """SiLU 激活函数类"""
     
     def __init__(self, config: SiLUConfig):
-        super().__init__(config)
+        super().__init__(config,
+                         table_func=torch.sigmoid,
+                         name="SiLU",
+                         table_name="sigmoid")
         self.config = config
         
-        # 初始化查找表
-        self.lookup_table = None
-        if self.config.use_lookup_table:
-            self._initialize_lookup_table()
-    
-    def _initialize_lookup_table(self):
-        """初始化 Sigmoid 查找表"""
-        try:
-            from core.algorithms import create_sigmoid_table
-            self.lookup_table = create_sigmoid_table(
-                name="silu_sigmoid",
-                bit_len=self.config.lookup_bit_len,
-                interpolation_method=self.config.interpolation_method
-            )
-            self.logger.info(f"SiLU 查找表初始化完成: {self.config.lookup_bit_len} 点")
-        except Exception as e:
-            self.logger.warning(f"查找表初始化失败，将使用直接计算: {e}")
-            self.lookup_table = None
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """SiLU 前向传播"""
-        if self.lookup_table is not None:
-            # 使用查找表计算 Sigmoid
-            sigmoid_x = self.lookup_table.lookup_sigmoid(x)
-        else:
-            # 直接计算 Sigmoid
-            sigmoid_x = MathUtils.sigmoid_stable(x)
+    def _forward_direct(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+        """SiLU 前向传播(直接计算)"""
+        # 提高精度
+        compute_tensor = original_tensor.to(dtype=self.config.compute_dtype)
+
+        sigmoid_x = torch.sigmoid(compute_tensor)
         
         # SiLU(x) = x * sigmoid(x)
-        return x * sigmoid_x
+        return (compute_tensor * sigmoid_x).to(dtype=self.config.dtype)
+    
+    def _forward_reference(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+        """SiLU 前向传播(参考实现)"""
+        silu = torch.nn.SiLU()
+        return silu(original_tensor)
+    
+    def _forward_with_lookup_table(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+        """SiLU 前向传播(使用查找表)"""
+        # 提高精度
+        compute_tensor = original_tensor.to(dtype=self.config.compute_dtype)
+        # 计算 sigmoid(x)
+        sigmoid_x = self.lookup_table.lookup(compute_tensor)
+
+        # SiLU(x) = x * sigmoid(x)
+        return (compute_tensor * sigmoid_x).to(dtype=self.config.dtype)
     
     def backward(self, grad_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """SiLU 反向传播"""
         # SiLU 的导数: sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))
         if self.lookup_table is not None:
-            sigmoid_x = self.lookup_table.lookup_sigmoid(x)
+            sigmoid_x = self.lookup_table.lookup(x)
         else:
             sigmoid_x = MathUtils.sigmoid_stable(x)
         
@@ -65,11 +63,3 @@ class SiLUActivation(BaseActivationFunction):
         
         return grad_output * silu_derivative
     
-    def get_config(self) -> Dict[str, Any]:
-        """获取配置信息"""
-        return {
-            'use_lookup_table': self.config.use_lookup_table,
-            'lookup_bit_len': self.config.lookup_bit_len,
-            'interpolation_method': self.config.interpolation_method,
-            'dtype': self.config.dtype
-        }

@@ -14,7 +14,7 @@ from .activation_manager import (
 
 from .base_activation import (
     BaseActivationFunction,
-    ActivationOptimizer
+    ActivationScanner
 )
 
 from .softmax_activation import (
@@ -60,7 +60,7 @@ __all__ = [
     'BaseActivationFunction', 'ActivationConfig', 'ActivationFunctionManager',
     'get_activation_manager', 'create_activation_function', 'benchmark_activation_functions',
     
-    'BaseActivationFunction', 'ActivationOptimizer',
+    'BaseActivationFunction', 'ActivationScanner',
     
     # Softmax
     'SoftmaxConfig', 'SoftmaxActivation',

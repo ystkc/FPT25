@@ -4,6 +4,8 @@
 """
 
 import math
+import hashlib
+import pickle
 import torch
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Union, Callable
@@ -309,7 +311,6 @@ class LookupTable:
         
         # 智能缓存
         self.cache = get_lookup_table_cache()
-        self._config_hash = self._generate_config_hash()
         
         # 验证配置
         self._validate_config()
@@ -318,7 +319,7 @@ class LookupTable:
         self._init_sampling_strategy()
         self._init_interpolation_method()
 
-        # self.sample = 9
+        self.sample = 9
     
     def _validate_config(self) -> None:
         """验证配置参数"""
@@ -339,9 +340,10 @@ class LookupTable:
     
     def _generate_config_hash(self) -> str:
         """生成配置哈希"""
-        import hashlib
-        config_str = f"{self.config.bit_len}_{self.config.interpolation_method}_{self.config.sampling_strategy}_{self.config.x_struct_min}_{self.config.x_struct_max}_{self.config.table_name}_{self.config.bit_len}"
-        return hashlib.md5(config_str.encode()).hexdigest()
+        static_config = self.config.__dict__.copy()
+        del static_config["x_struct_min"]
+        del static_config["x_struct_max"]
+        return hashlib.md5(pickle.dumps(static_config, protocol=5)).hexdigest()
     
     def _init_sampling_strategy(self) -> None:
         """初始化采样策略"""
@@ -378,11 +380,12 @@ class LookupTable:
         self.function = function
         
         # 尝试从缓存获取
-        cached_table = self.cache.get_table(self._config_hash)
-        if cached_table is not None:
-            self.x_points = cached_table['x_points']
-            self.y_points = cached_table['y_points']
-            return
+        if self.config.use_cache:
+            cached_table = self.cache.get_table(self._generate_config_hash())
+            if cached_table is not None:
+                self.x_points = cached_table['x_points']
+                self.y_points = cached_table['y_points']
+                return
         
         # 如果是自适应采样，需要先设置函数
         if self.config.sampling_strategy == 'adaptive':
@@ -420,7 +423,8 @@ class LookupTable:
             'x_points': self.x_points,
             'y_points': self.y_points
         }
-        self.cache.set_table(self._config_hash, table_data)
+        if self.config.use_cache:
+            self.cache.set_table(self._generate_config_hash(), table_data)
     
     def lookup(self, x: Union[float, torch.Tensor]) -> Union[float, torch.Tensor]:
         """查找表查询，分类float还是tensor，如果是float则转换为tensor，如果是tensor则进行递归展开"""
@@ -443,11 +447,10 @@ class LookupTable:
         """标量查找，tensor中只有1个元素"""
         x_struct = x.view(self.config.unsigned_type).int() >> (self.config.zero_len)
         result = self.y_points[x_struct]  # 截断位数直接算出地址，无需查表
-        # result_x = self.x_points[x_struct]
-        
         # if self.sample > 0:
         #     self.sample -= 1
-        #     print("x=", x, "x_struct=", x_struct, "result=", result, "result_X=", result_x, "standard_result=", self.function(x))
+        #     print(self.config.unsigned_type, self.config.zero_len, self.config.dtype)
+        #     print("sample: ", x.item(), 'struct=', x_struct.item(), 'lookup=', result, 'ans=', self.function(x).item())
         return result
     
     def _vectorized_linear_interpolation(self, x: torch.Tensor) -> torch.Tensor:
@@ -548,31 +551,14 @@ class LookupTable:
     
     def get_table_info(self) -> Dict[str, any]:
         """获取查找表信息"""
-        return {
-            'bit_len': self.config.bit_len,
-            'interpolation_method': self.config.interpolation_method,
-            'sampling_strategy': self.config.sampling_strategy,
-            'x_range': (self.config.x_struct_min, self.config.x_struct_max),
-            'table_name': self.config.table_name,
-            'x_points': self.x_points.tolist() if self.x_points is not None else None,
-            'y_points': self.y_points.tolist() if self.y_points is not None else None
-        }
+        return self.config
     
     def save_table(self, filepath: str) -> None:
         """保存查找表到文件"""
         import json
         
         table_data = {
-            'config': {
-                'bit_len': self.config.bit_len,
-                'dtype_len': self.config.dtype_len,
-                'interpolation_method': self.config.interpolation_method,
-                'sampling_strategy': self.config.sampling_strategy,
-                'x_struct_min': self.config.x_struct_min,
-                'x_struct_max': self.config.x_struct_max,
-                'table_name': self.config.table_name,
-                'bit_len': self.config.bit_len
-            },
+            'config': self.config.__dict__,
             'x_points': self.x_points.tolist() if self.x_points is not None else None,
             'y_points': self.y_points.tolist() if self.y_points is not None else None
         }

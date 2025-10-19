@@ -13,6 +13,7 @@ from core.algorithms import MathUtils
 from core.base.logs import get_logger
 
 from config.config import GELUConfig
+from core.utils.memory_pool import MemoryContext
 
 
 
@@ -20,21 +21,24 @@ class GELUActivation(BaseActivationFunction):
     """GELU 激活函数类"""
     
     def __init__(self, config: GELUConfig):
-        super().__init__(config)
+        super().__init__(config,
+                         table_func=torch.nn.GELU(config.approximation_type),
+                         name='GELU',
+                         table_name='GELU')
         self.config = config
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """GELU 前向传播"""
-        if self.config.use_approximation:
-            if self.config.approximation_type == 'tanh':
-                # 使用 tanh 近似
-                return MathUtils.gelu_approximation(x)
-            else:
-                # 使用精确实现
-                return MathUtils.gelu_exact(x)
-        else:
-            # 使用 PyTorch 标准实现
-            return torch.nn.functional.gelu(x)
+    def _forward_reference(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+        """GELU 前向传播(参考实现)"""
+        return self.table_func(original_tensor)
+    
+    def _forward_direct(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+        """GELU 前向传播(直接实现)"""
+        compute_tensor = original_tensor.to(dtype=self.config.compute_dtype)
+        return (compute_tensor * 0.5 * (1.0 + torch.erf(compute_tensor / math.sqrt(2.0)))).to(dtype=self.config.dtype)
+    
+    def _forward_with_lookup_table(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+        """GELU 前向传播(使用查找表)"""
+        return self.lookup_table.lookup(original_tensor.to(dtype=self.config.compute_dtype)).to(dtype=self.config.dtype)
     
     def backward(self, grad_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """GELU 反向传播"""
@@ -42,10 +46,3 @@ class GELUActivation(BaseActivationFunction):
         # 实际应用中需要更复杂的梯度计算
         return grad_output
     
-    def get_config(self) -> Dict[str, Any]:
-        """获取配置信息"""
-        return {
-            'use_approximation': self.config.use_approximation,
-            'approximation_type': self.config.approximation_type,
-            'dtype': self.config.dtype
-        }

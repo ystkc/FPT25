@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
+import pickle
 import torch
 import math
 import time
 import traceback
 from typing import Any, Tuple, Dict, Callable
 
-from config.config import SoftmaxConfig, LookupTableConfig, ActivationConfig, ActivationFunctions, ProjectConfig
+from config.config import ActivationConfig, LookupTableConfig
 from core.base.constants import (
     TENSOR_SHAPE, INTERPOLATION_METHODS
 )
@@ -20,7 +21,7 @@ from core.base.exceptions import (
 class BaseActivationFunction(ABC):
     """激活函数基类"""
     
-    def __init__(self, config: SoftmaxConfig, table_func: Callable, name: str = None, table_name: str = None):
+    def __init__(self, config: ActivationConfig, table_func: Callable, name: str = None, table_name: str = None):
         self.config = config
         self.logger = get_logger()
         self.performance_logger = get_performance_logger()
@@ -36,19 +37,6 @@ class BaseActivationFunction(ABC):
         
         # 初始化查找表
         self.lookup_table: LookupTable = None
-        if self.config.use_lookup_table:
-            self._initialize_lookup_table()
-
-    def _convert_for_computation(self, tensor: torch.Tensor) -> torch.Tensor:
-        """
-        转换张量数据类型以进行计算（转换为精度更高的类型）
-        
-        Args:
-            tensor: 输入张量
-            
-        Returns:
-            转换后的张量
-        """
 
     def _validate_input(self, x: torch.Tensor) -> None:
         """验证输入张量"""
@@ -68,33 +56,32 @@ class BaseActivationFunction(ABC):
         if self.config.interpolation_method not in INTERPOLATION_METHODS:
             raise ValueError(f"不支持的插值方法: {self.config.interpolation_method}")
         
-    def _initialize_lookup_table(self) -> None:
+    def initialize_lookup_table(self, tableConfig: LookupTableConfig) -> None:
         """初始化查找表"""
+        if not self.config.use_lookup_table:
+            return
         try:
-            self.lookup_table = create_exp_table(
-                table_name=self.name,
-                bit_len=self.config.lookup_table_bitlen,
-                interpolation_method=self.config.interpolation_method
-            )
-            self.logger.info(f"{self.name} 查找表初始化完成: {self.config.lookup_table_bitlen} 位共 {len(self.lookup_table.y_points)}")
+            self.lookup_table = LookupTable(tableConfig) # 由于历史遗留原因，此处直接销毁重新生成LookupTable对象
+            self.lookup_table.generate_table(self.table_func)
+            self.logger.info(f"{self.name} 查找表初始化完成: {tableConfig.bit_len} 位共 {len(self.lookup_table.y_points)}")
         except Exception as e:
             self.logger.warning(f"{self.name} 查找表初始化失败，将使用直接计算: {e}")
             traceback.print_exc()
             self.lookup_table = None
 
     @abstractmethod
-    def _forward_with_lookup_table(self, x: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+    def _forward_with_lookup_table(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
         """使用查找表进行前向传播"""
     
     @abstractmethod
-    def _forward_direct(self, x: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+    def _forward_direct(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
         """直接进行前向传播"""
 
     @abstractmethod
-    def _forward_reference(self, x: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
+    def _forward_reference(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
         """(torch库的)参考实现"""
     
-    def forward(self, x: torch.Tensor, ref: bool = False) -> torch.Tensor:
+    def forward(self, original_tensor: torch.Tensor, ref: bool = False) -> torch.Tensor:
         """
         前向传播
         
@@ -106,21 +93,20 @@ class BaseActivationFunction(ABC):
             输出张量
         """
         # 验证输入
-        self._validate_input(x)
+        self._validate_input(original_tensor)
         
         # 使用内存池进行内存管理
         with memory_context() as mem_ctx:
             if ref:
-                result = self._forward_reference(x, mem_ctx)
+                result = self._forward_reference(original_tensor, mem_ctx)
             elif self.config.use_lookup_table and self.lookup_table is not None:
-                result = self._forward_with_lookup_table(x, mem_ctx)
+                result = self._forward_with_lookup_table(original_tensor, mem_ctx)
             else:
-                result = self._forward_direct(x, mem_ctx)
+                result = self._forward_direct(original_tensor, mem_ctx)
             
         return result
         
-    def benchmark(self, shape: Tuple[int, int] = TENSOR_SHAPE, 
-                 num_runs: int = 100) -> Dict[str, Any]:
+    def benchmark(self, num_runs: int = 100) -> Dict[str, Any]:
         """基准测试
         Args:
             shape: 输入张量形状
@@ -147,6 +133,7 @@ class BaseActivationFunction(ABC):
         """
         
         # 基准测试 - 使用更高精度的时间测量
+        shape: Tuple[int, int] = TENSOR_SHAPE
         results = {'results': []}
         
         # 计算精度 - 在float32精度下评估
@@ -156,7 +143,7 @@ class BaseActivationFunction(ABC):
             for _ in range(num_runs):
                 
                 # 创建测试数据
-                x = torch.randn(shape, self.config.dtype)
+                x = torch.randn(shape, dtype=self.config.dtype)
 
                 start_time = time.perf_counter_ns()  # 使用纳秒精度
                 output = self.forward(x)
@@ -212,7 +199,6 @@ class BaseActivationFunction(ABC):
         """获取配置信息"""
         return {
             'use_lookup_table': self.config.use_lookup_table,
-            'lookup_bit_len': self.config.lookup_table_bitlen,
             'interpolation_method': self.config.interpolation_method,
             'use_fixed_point': self.config.use_fixed_point,
             'fixed_point_format': self.config.fixed_point_format,
@@ -225,37 +211,99 @@ class BaseActivationFunction(ABC):
         """反向传播"""
 
         
-class ActivationOptimizer:
-    """激活函数 优化器"""
+class ActivationScanner:
+    """激活函数 参数扫描测试器"""
     
     def __init__(self, activation_function: BaseActivationFunction):
         self.logger = get_logger()
         self.acfun = activation_function
+        self.acfun_name = activation_function.name
     
-    def optimize_lookup_bit_len(self, input_shape: tuple = TENSOR_SHAPE,
-                                 bit_lens: list = None) -> Dict[str, Any]:
+    def optimize_lookup_bit_len(self, bit_lens: list = None):
         """优化查找表大小"""
         if bit_lens is None:
-            bit_lens = [400, 600, 800, 1000]
+            bit_lens = [15, 16, 17, 18, 19, 20]
+
+        table_config = LookupTableConfig(table_name=self.acfun_name+'-table')
         
         results = []
         
         for bit_len in bit_lens:
+            # 生成查找表
+            table_config.bit_len = bit_len
+            if bit_len > 16: # 从bfloat16开始，如果位宽超过16了再转换成float32
+                table_config.dtype_str = 'float32'
+                table_config.dtype_len = 32
+                table_config.unsigned_type_str = 'uint32' # 避免符号位影响正负
+                table_config.x_struct_min_int = 0x00000000
+                table_config.x_struct_max_int = 0xffffffff
+            else:
+                table_config.dtype_str = 'bfloat16'
+                table_config.dtype_len = 16
+                table_config.unsigned_type_str = 'uint16'
+                table_config.x_struct_min_int = 0x0000
+                table_config.x_struct_max_int = 0xffff
+            table_config.__post_init__()
+
+            self.acfun.initialize_lookup_table(table_config)
             # 基准测试
-            benchmark_result = self.acfun.benchmark([input_shape], num_runs=50)
+            benchmark_result = self.acfun.benchmark(num_runs=5)
             
             results.append({
                 'bit_len': bit_len,
+                'avg_time': benchmark_result['avg_time'],
+                'avg_score': benchmark_result['avg_score'],
+                'max_score': benchmark_result['max_score'],
+                'min_score': benchmark_result['min_score'],
                 'result': benchmark_result['results']
             })
+
+        # 对照组：direct
+        self.acfun.config.use_lookup_table = False
+        # 对照组1：bfloat16 - direct
+        self.acfun.config.compute_dtype_str = 'bfloat16'
+        self.acfun.config.compute_dtype = torch.bfloat16
+        table_config.bit_len = 16
+        table_config.dtype_str = 'bfloat16'
+        table_config.dtype_len = 16
+        table_config.unsigned_type_str = 'uint16'
+        table_config.x_struct_min_int = 0x0000
+        table_config.x_struct_max_int = 0xffff
+        table_config.__post_init__()
+        self.acfun.initialize_lookup_table(table_config)
+        benchmark_result = self.acfun.benchmark(num_runs=5)
+        results.append({
+            'bit_len': 'BF16-direct',
+            'avg_time': benchmark_result['avg_time'],
+            'avg_score': benchmark_result['avg_score'],
+            'max_score': benchmark_result['max_score'],
+            'min_score': benchmark_result['min_score'],
+            'result': benchmark_result['results']
+        })
+        # 对照组2：float32 - direct
+        self.acfun.config.compute_dtype_str = 'float32'
+        self.acfun.config.compute_dtype = torch.float32
+        table_config.bit_len = 16
+        table_config.dtype_str = 'float32'
+        table_config.dtype_len = 32
+        table_config.unsigned_type_str = 'uint32'
+        table_config.x_struct_min_int = 0x00000000
+        table_config.x_struct_max_int = 0xffffffff
+        table_config.__post_init__()
+        self.acfun.initialize_lookup_table(table_config)
+        benchmark_result = self.acfun.benchmark(num_runs=5)
+        results.append({
+            'bit_len': 'FP32-direct',
+            'avg_time': benchmark_result['avg_time'],
+            'avg_score': benchmark_result['avg_score'],
+            'max_score': benchmark_result['max_score'],
+            'min_score': benchmark_result['min_score'],
+            'result': benchmark_result['results']
+        })
         
-        # 找到最优配置
-        best_result = max(results, key=lambda x: x['avg_score'])
-        
-        return {
-            'results': results,
-            'best_bit_len': best_result['bit_len'],
-            'best_avg_score': best_result['avg_score'],
-            'best_time': best_result['avg_time']
-        }
-    
+        # 打印结果
+        print("|   bitlen   | avg_time | avg_score | max_score | min_score |")
+        print("|------------|----------|-----------|-----------|-----------|")
+        for result in results:
+            print(f"|{result['bit_len']:<12}| {result['avg_time']:.5f}s | {result['avg_score']:.7f} | {result['max_score']:.7f} | {result['min_score']:.7f} |")
+        print("|------------|----------|-----------|-----------|-----------|")

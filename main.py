@@ -2,7 +2,7 @@
 FPT25 激活函数 FPGA 硬件加速项目主程序
 支持命令行接口，提供测试、基准测试、优化等功能
 """
-
+import traceback
 import argparse
 import sys
 import time
@@ -10,7 +10,8 @@ import torch
 from typing import Dict, Any
 from pathlib import Path
 
-from core.base.logs import setup_logging, get_logger
+from core.activation_functions.base_activation import ActivationScanner
+from core.base.logs import FPT25Logger, setup_logging, get_logger
 from core.base.constants import ACTIVATION_FUNCTIONS, TENSOR_SHAPE, BATCH_SIZE
 from core.activation_functions import ActivationFunctionManager, get_activation_manager, create_activation_function
 from evaluation import get_accuracy_evaluator, get_benchmark_runner, get_test_suite
@@ -21,47 +22,33 @@ from utils import get_result_manager, generate_excel_report, generate_benchmark_
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-def _import_modules():
-    """延迟导入模块以避免循环依赖"""
-    
-    return {
-        'setup_logging': setup_logging,
-        'get_logger': get_logger,
-        'ACTIVATION_FUNCTIONS': ACTIVATION_FUNCTIONS,
-        'TENSOR_SHAPE': TENSOR_SHAPE,
-        'BATCH_SIZE': BATCH_SIZE,
-        'get_activation_manager': get_activation_manager,
-        'create_activation_function': create_activation_function,
-        'get_accuracy_evaluator': get_accuracy_evaluator,
-        'get_benchmark_runner': get_benchmark_runner,
-        'get_test_suite': get_test_suite,
-        'get_config_manager': get_config_manager,
-        'get_config': get_config,
-        'get_result_manager': get_result_manager,
-        'generate_excel_report': generate_excel_report,
-        'generate_benchmark_excel_report': generate_benchmark_excel_report,
-        'plot_performance_trends': plot_performance_trends,
-        'plot_benchmark_results': plot_benchmark_results,
-        'save_benchmark_json_report': save_benchmark_json_report
-    }
-
 # 全局模块缓存
-_modules = None
-
-def get_modules():
-    """获取模块，延迟加载"""
-    global _modules
-    if _modules is None:
-        _modules = _import_modules()
-    return _modules
-
+modules = {
+    'setup_logging': setup_logging,
+    'get_logger': get_logger,
+    'ACTIVATION_FUNCTIONS': ACTIVATION_FUNCTIONS,
+    'TENSOR_SHAPE': TENSOR_SHAPE,
+    'BATCH_SIZE': BATCH_SIZE,
+    'get_activation_manager': get_activation_manager,
+    'create_activation_function': create_activation_function,
+    'get_accuracy_evaluator': get_accuracy_evaluator,
+    'get_benchmark_runner': get_benchmark_runner,
+    'get_test_suite': get_test_suite,
+    'get_config_manager': get_config_manager,
+    'get_config': get_config,
+    'get_result_manager': get_result_manager,
+    'generate_excel_report': generate_excel_report,
+    'generate_benchmark_excel_report': generate_benchmark_excel_report,
+    'plot_performance_trends': plot_performance_trends,
+    'plot_benchmark_results': plot_benchmark_results,
+    'save_benchmark_json_report': save_benchmark_json_report
+}
 
 class FPT25Main:
     """FPT25 主程序类"""
     
     def __init__(self):
-        modules = get_modules()
-        self.logger = modules['get_logger']()
+        self.logger: FPT25Logger = modules['get_logger']()
         self.config_manager = modules['get_config_manager']()
         self.config = modules['get_config']()
         self.activation_manager: ActivationFunctionManager = modules['get_activation_manager']()
@@ -79,7 +66,6 @@ class FPT25Main:
             activation_function = self.activation_manager.create_function(function_name)
             
             # 创建测试数据
-            modules = get_modules()
             input_tensor = torch.randn(modules['TENSOR_SHAPE'], dtype=getattr(torch, self.config.test.dtype))
             
             # 运行前向传播
@@ -151,7 +137,6 @@ class FPT25Main:
             activation_function = self.activation_manager.create_function(function_name)
             
             # 创建测试数据
-            modules = get_modules()
             input_tensor = torch.randn(modules['TENSOR_SHAPE'], dtype=getattr(torch, self.config.test.dtype))
             
             # 运行激活函数
@@ -195,7 +180,6 @@ class FPT25Main:
         
         results = {}
         
-        modules = get_modules()
         for function_name in modules['ACTIVATION_FUNCTIONS']:
             self.logger.info(f"处理激活函数: {function_name}")
             
@@ -205,6 +189,8 @@ class FPT25Main:
                 result = self.run_benchmark(function_name, **kwargs)
             elif mode == 'accuracy':
                 result = self.run_accuracy_test(function_name, **kwargs)
+            elif mode == 'scan':
+                result = self.run_scan(function_name, **kwargs)
             else:
                 result = {'function_name': function_name, 'success': False, 'error': f'Unknown mode: {mode}'}
             
@@ -216,26 +202,20 @@ class FPT25Main:
         
         return results
     
-    def run_optimization(self, function_name: str, **kwargs) -> Dict[str, Any]:
-        """运行优化"""
-        self.logger.info(f"开始优化: {function_name}")
+    def run_scan(self, function_name: str, **kwargs) -> Dict[str, Any]:
+        """运行扫描"""
+        self.logger.info(f"开始扫描: {function_name}")
         
         try:
-            # 这里可以添加具体的优化逻辑
-            # 例如：查找表大小优化、插值方法优化等
-            
-            result = {
-                'function_name': function_name,
-                'optimization_type': 'lookup_bit_len',
-                'success': True,
-                'message': '优化完成'
-            }
-            
-            self.logger.info(f"优化完成: {function_name}")
-            return result
+            function = self.activation_manager.create_function(function_name)
+            scanner = ActivationScanner(function)
+            bit_lens = kwargs.get('bit_lens')
+            scanner.optimize_lookup_bit_len(bit_lens)
+
             
         except Exception as e:
-            self.logger.error(f"优化失败: {function_name}, 错误: {e}")
+            self.logger.error(f"扫描失败: {function_name}, 错误: {e}")
+            traceback.print_exc()
             return {
                 'function_name': function_name,
                 'success': False,
@@ -314,21 +294,20 @@ def create_argument_parser() -> argparse.ArgumentParser:
 示例用法:
   python main.py --mode test --function softmax
   python main.py --mode benchmark --function all
-  python main.py --mode accuracy --function softmax --bit_len 800
-  python main.py --mode optimize --function softmax --interpolation linear
+  python main.py --mode accuracy --function softmax --bit_lens [14]
+  python main.py --mode scan --function softmax --interpolation linear --bit_lens [14, 15, 16]
         """
     )
     
     # 基本参数
-    parser.add_argument('--mode', choices=['test', 'benchmark', 'accuracy', 'optimize', 'all_functions'],
+    parser.add_argument('--mode', choices=['test', 'benchmark', 'accuracy', 'scan', 'all_functions'],
                        default='test', help='运行模式')
-    modules = get_modules()
     parser.add_argument('--function', choices=modules['ACTIVATION_FUNCTIONS'] + ['all'],
                        default='softmax', help='激活函数名称')
     
     # 查找表参数
-    parser.add_argument('--bit_len', type=int, default=800,
-                       help='查找表点数 (795-1000)')
+    parser.add_argument('--bit_lens', type=int, nargs='+', default=[14],
+                       help='查找表位宽列表 (10-32)')
     parser.add_argument('--interpolation', choices=['direct', 'linear', 'quadratic'],
                        default='linear', help='插值方法')
     parser.add_argument('--sampling_strategy', choices=['uniform', 'adaptive', 'logarithmic', 'quadratic'],
@@ -373,7 +352,6 @@ def main():
     args = parser.parse_args()
     
     # 设置日志
-    modules = get_modules()
     log_level = 'DEBUG' if args.verbose else args.log_level
     modules['setup_logging'](level=log_level)
     logger = modules['get_logger']()
@@ -387,7 +365,7 @@ def main():
     
     # 准备参数
     kwargs = {
-        'bit_len': args.bit_len,
+        'bit_lens': args.bit_lens,
         'interpolation': args.interpolation,
         'sampling_strategy': args.sampling_strategy,
         'use_advanced_lookup': args.use_advanced_lookup,
@@ -420,14 +398,13 @@ def main():
             else:
                 results = main_app.run_accuracy_test(args.function, **kwargs)
         
-        elif args.mode == 'optimize':
+        elif args.mode == 'scan':
             if args.function == 'all':
                 results = {}
-                modules = get_modules()
                 for func_name in modules['ACTIVATION_FUNCTIONS']:
-                    results[func_name] = main_app.run_optimization(func_name, **kwargs)
+                    results[func_name] = main_app.run_scan(func_name, **kwargs)
             else:
-                results = main_app.run_optimization(args.function, **kwargs)
+                results = main_app.run_scan(args.function, **kwargs)
         
         elif args.mode == 'all_functions':
             results = main_app.run_all_functions('test', **kwargs)

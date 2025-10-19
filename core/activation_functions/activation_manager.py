@@ -89,14 +89,13 @@ class ActivationFunctionManager:
             # 获取激活函数配置
             if hasattr(global_config, 'activation_functions') and hasattr(global_config.activation_functions, function_name):
                 function_config = getattr(global_config.activation_functions, function_name)
-                
-                # 创建配置对象
-                config_dict = {}
-                for field in config_class.__dataclass_fields__:
-                    if field in function_config:
-                        config_dict[field] = function_config[field]
-                
-                return config_class(**config_dict)
+                if isinstance(function_config, config_class):
+                    return function_config
+                elif isinstance(function_config, dict):
+                    return config_class.from_dict(function_config)
+                else:
+                    self.logger.warning(f"未知的 {function_name} 配置格式，使用默认配置")
+                    return config_class()
             else:
                 self.logger.warning(f"未找到 {function_name} 的全局配置，使用默认配置")
                 return config_class()

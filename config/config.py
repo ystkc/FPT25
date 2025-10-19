@@ -52,7 +52,8 @@ class LookupTableConfig:
     use_advanced_lookup: bool = False
     x_struct_min_int: int = 0x0000 # 使用int初始化，在后初始化中转换为dtype类型
     x_struct_max_int: int = 0xffff
-    table_name: str = 'exp'
+    table_name: str = 'default_table'
+    use_cache: bool = True # 计算完成后写入文件，并在遇到相同配置时直接使用文件
 
     def __post_init__(self):
         '''将x_struct_min、x_struct_max转换为dtype类型'''
@@ -93,7 +94,7 @@ class SiLUConfig(ActivationConfig):
 class GELUConfig(ActivationConfig):
     """GELU 配置"""
     use_approximation: bool = True
-    approximation_type: str = 'tanh'  # 'tanh' or 'erf'
+    approximation_type: str = 'none'  # 'tanh' or 'erf' or 'none'
 
 @dataclass
 class AddConfig(ActivationConfig):
@@ -145,6 +146,15 @@ class OutputConfig:
     save_charts: bool = True
     generate_excel: bool = True
 
+
+DEFAULT_SOFTMAX_CONFIG = SoftmaxConfig()
+DEFAULT_LAYER_NORM_CONFIG = LayerNormConfig()
+DEFAULT_RMS_NORM_CONFIG = RMSNormConfig()
+DEFAULT_SILU_CONFIG = SiLUConfig()
+DEFAULT_GELU_CONFIG = GELUConfig()
+DEFAULT_ADD_CONFIG = AddConfig()
+DEFAULT_MULTIPLY_CONFIG = MultiplyConfig()
+
 @dataclass
 class ActivationFunctions:
     """激活函数配置"""
@@ -155,6 +165,7 @@ class ActivationFunctions:
     gelu: GELUConfig = None
     add: AddConfig = None
     multiply: MultiplyConfig = None
+
 
 @dataclass
 class ProjectConfig:
@@ -172,7 +183,7 @@ class ProjectConfig:
     output: OutputConfig = None
     
     # 激活函数配置
-    activation_functions: Dict[str, Dict[str, Any]] = None
+    activation_functions: ActivationConfig = None
     
     def __post_init__(self):
         """初始化后处理"""
@@ -213,7 +224,22 @@ class ProjectConfig:
             data['output'] = OutputConfig(**data['output'])
 
         if 'activation_functions' in data and isinstance(data['activation_functions'], dict):
-            data['activation_functions'] = ActivationFunctions(**data['activation_functions'])
+             afs = ActivationFunctions(**data['activation_functions'])
+             if afs.softmax is None:
+                 afs.softmax = DEFAULT_SOFTMAX_CONFIG
+             if afs.layer_norm is None:
+                 afs.layer_norm = DEFAULT_LAYER_NORM_CONFIG
+             if afs.rms_norm is None:
+                 afs.rms_norm = DEFAULT_RMS_NORM_CONFIG
+             if afs.silu is None:
+                 afs.silu = DEFAULT_SILU_CONFIG
+             if afs.gelu is None:
+                 afs.gelu = DEFAULT_GELU_CONFIG
+             if afs.add is None:
+                 afs.add = DEFAULT_ADD_CONFIG
+             if afs.multiply is None:
+                 afs.multiply = DEFAULT_MULTIPLY_CONFIG
+             data['activation_functions'] = afs
         
         return cls(**data)
 

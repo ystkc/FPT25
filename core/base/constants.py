@@ -30,6 +30,7 @@ DEFAULT_X_STRUCT_MAX_INT = 0xFFFF
 DATA_TYPE_MAP: Dict[str, torch.dtype] = {
     'float32': torch.float32,
     'bfloat16': torch.bfloat16,
+    'uint64': torch.uint64,
     'uint32': torch.uint32,
     'uint16': torch.uint16,
 }
