@@ -3,6 +3,7 @@
 统一管理项目中的所有常量，包括竞赛要求的参数和配置项
 """
 
+from dataclasses import field
 import math
 import torch
 from typing import Tuple, List, Dict, Any
@@ -23,8 +24,7 @@ DEFAULT_UNSIGNED_TYPE: str = 'uint16'
 DEFAULT_DTYPE_LEN: int = 16
 
 # 二进制寻址上下限(16位数据类型)
-DEFAULT_X_STRUCT_MIN_INT = 0x0000
-DEFAULT_X_STRUCT_MAX_INT = 0xFFFF
+# DEFAULT_X_STRUCT_RANGE_INT = field(default_factory=lambda: [(0x0000, 0x7f7f), (0x8000, 0xff7f)])
 
 # 数据映射(将str映射到dtype)
 DATA_TYPE_MAP: Dict[str, torch.dtype] = {
@@ -56,8 +56,8 @@ INTERPOLATION_METHODS: List[str] = ['direct', 'linear', 'quadratic']
 DEFAULT_INTERPOLATION: str = 'quadratic'  # 默认使用二次插值以提高精度
 
 # 采样策略
-SAMPLING_STRATEGIES: List[str] = ['uniform', 'adaptive', 'logarithmic', 'quadratic']
-DEFAULT_SAMPLING_STRATEGY: str = 'adaptive'  # 默认使用自适应采样以提高精度
+SAMPLING_STRATEGIES: List[str] = ['binary', 'random']
+DEFAULT_SAMPLING_STRATEGY: str = 'binary'  # 默认使用自适应采样以提高精度
 
 # =============================================================================
 # 激活函数权重（竞赛评分权重）

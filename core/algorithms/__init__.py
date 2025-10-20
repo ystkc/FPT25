@@ -14,10 +14,7 @@ from .math_utils import (
 from .lookup_table import (
     LookupTableConfig,
     SamplingStrategy,
-    UniformSampling,
-    AdaptiveSampling,
-    LogarithmicSampling,
-    QuadraticSampling,
+    BinarySampling,
     InterpolationMethod,
     DirectLookup,
     LinearInterpolation,
@@ -32,10 +29,9 @@ __all__ = [
     'MathUtils', 'safe_exp', 'safe_log', 'safe_sqrt', 'safe_divide',
     
     # 查找表
-    'LookupTableConfig', 'SamplingStrategy', 'UniformSampling',
+    'LookupTableConfig', 'SamplingStrategy', 'BinarySampling', 'UniformSampling',
     'AdaptiveSampling', 'LogarithmicSampling', 'QuadraticSampling',
     'InterpolationMethod', 'DirectLookup', 'LinearInterpolation',
-    'QuadraticInterpolation', 'LookupTable', 'ExpLookupTable',
-    'SigmoidLookupTable', 'LookupTableManager', 'get_table_manager',
+    'QuadraticInterpolation', 'LookupTable',
     'create_exp_table', 'create_sigmoid_table'
 ]

@@ -23,8 +23,8 @@ class SoftmaxActivation(BaseActivationFunction):
     def __init__(self, config: SoftmaxConfig):
         super().__init__(config,
                          table_func=torch.exp,
-                         name='Softmax', 
-                         table_name='Exponential')
+                         name='Softmax',
+                         default_table_name='Exponential')
 
     def _forward_reference(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:
         """Softmax 参考答案"""

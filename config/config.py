@@ -7,7 +7,7 @@ import json
 import os
 import traceback
 from typing import Dict, Any, Optional, Union, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 import torch
@@ -42,25 +42,25 @@ class ActivationConfig:
 @dataclass
 class LookupTableConfig:
     """查找表配置"""
-    
     bit_len: int = DEFAULT_BIT_LEN # 查找表位长度，默认12位
+    sample_count: int = 1024  # （仅随机采样有效）采样点数，默认1024个
+    random_seed: int = 0 # （仅随机采样有效）
     dtype_str: str = DEFAULT_DTYPE  # 查找表数据类型，默认bfloat16
     unsigned_type_str: str = DEFAULT_UNSIGNED_TYPE  # 无符号数据类型，和dtype位宽相同
     dtype_len: int = DEFAULT_DTYPE_LEN  # 数据类型位长，默认16位
     interpolation_method: str = DEFAULT_INTERPOLATION  # 默认使用二次插值
     sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY  # 默认使用自适应采样
     use_advanced_lookup: bool = False
-    x_struct_min_int: int = 0x0000 # 使用int初始化，在后初始化中转换为dtype类型
-    x_struct_max_int: int = 0xffff
-    table_name: str = 'default_table'
-    use_cache: bool = True # 计算完成后写入文件，并在遇到相同配置时直接使用文件
+    x_struct_range_int: list = field(default_factory=lambda: [(0x0000, 0x7f7f), (0x8000, 0xff7f)]) # 使用int初始化，在后初始化中转换为dtype类型
+    table_name: str = ''
+    use_cache: bool = False # 计算完成后写入文件，并在遇到相同配置时直接使用文件
+    use_parallel_lookup: bool = True # 并行查找表查询操作（暂时不确定能否加速还是拖慢计算速度）
 
     def __post_init__(self):
-        '''将x_struct_min、x_struct_max转换为dtype类型'''
+        '''将x_struct_range转换为dtype类型'''
         self.dtype = DATA_TYPE_MAP[self.dtype_str]
         self.unsigned_type = DATA_TYPE_MAP[self.unsigned_type_str]
-        self.x_struct_min = torch.tensor(self.x_struct_min_int, dtype=self.unsigned_type)
-        self.x_struct_max = torch.tensor(self.x_struct_max_int, dtype=self.unsigned_type)
+        self.x_struct_range = torch.tensor(self.x_struct_range_int, dtype=self.unsigned_type)
         self.unsigned_mask = (1 << self.dtype_len) - 1  # 无符号掩码
         self.zero_len = self.dtype_len - self.bit_len  # 零位长度
 

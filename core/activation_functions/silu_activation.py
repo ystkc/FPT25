@@ -22,7 +22,7 @@ class SiLUActivation(BaseActivationFunction):
         super().__init__(config,
                          table_func=torch.sigmoid,
                          name="SiLU",
-                         table_name="sigmoid")
+                         default_table_name="sigmoid")
         self.config = config
         
     def _forward_direct(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:

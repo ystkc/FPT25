@@ -36,3 +36,6 @@ sphinx-rtd-theme>=0.5.0
 # 性能分析
 memory-profiler>=0.60.0
 line-profiler>=3.3.0
+
+# 缓存服务
+httpx>=0.24.1

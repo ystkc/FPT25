@@ -25,7 +25,7 @@ class LayerNormActivation(BaseActivationFunction):
         super().__init__(config,
                          table_func=torch.sqrt,
                          name='layer_norm',
-                         table_name='sqrt')
+                         default_table_name='sqrt')
         self.config = config
         
         # 初始化可学习参数

@@ -24,7 +24,7 @@ class GELUActivation(BaseActivationFunction):
         super().__init__(config,
                          table_func=torch.nn.GELU(config.approximation_type),
                          name='GELU',
-                         table_name='GELU')
+                         default_table_name='GELU')
         self.config = config
     
     def _forward_reference(self, original_tensor: torch.Tensor, mem_ctx: MemoryContext) -> torch.Tensor:

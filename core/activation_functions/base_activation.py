@@ -21,7 +21,7 @@ from core.base.exceptions import (
 class BaseActivationFunction(ABC):
     """激活函数基类"""
     
-    def __init__(self, config: ActivationConfig, table_func: Callable, name: str = None, table_name: str = None):
+    def __init__(self, config: ActivationConfig, table_func: Callable, name: str = None, default_table_name: str = None):
         self.config = config
         self.logger = get_logger()
         self.performance_logger = get_performance_logger()
@@ -30,7 +30,7 @@ class BaseActivationFunction(ABC):
 
         self.name = name
         self.table_func = table_func
-        self.table_name = table_name
+        self.default_table_name = default_table_name
         
         # 验证配置
         self._validate_config()
@@ -60,6 +60,8 @@ class BaseActivationFunction(ABC):
         """初始化查找表"""
         if not self.config.use_lookup_table:
             return
+        if tableConfig.table_name == '':
+            tableConfig.table_name = self.default_table_name
         try:
             self.lookup_table = LookupTable(tableConfig) # 由于历史遗留原因，此处直接销毁重新生成LookupTable对象
             self.lookup_table.generate_table(self.table_func)
@@ -219,14 +221,16 @@ class ActivationScanner:
         self.acfun = activation_function
         self.acfun_name = activation_function.name
     
-    def optimize_lookup_bit_len(self, bit_lens: list = None):
+    def optimize_lookup_bit_len(self, bit_lens: list = None, sampling: str = 'binary', interpolation: str = 'direct'):
         """优化查找表大小"""
         if bit_lens is None:
             bit_lens = [15, 16, 17, 18, 19, 20]
 
-        table_config = LookupTableConfig(table_name=self.acfun_name+'-table')
+        table_config = LookupTableConfig(sampling_strategy=sampling, interpolation_method=interpolation)
+        # None：采用激活函数提供的表名
         
         results = []
+        start_time = time.perf_counter()
         
         for bit_len in bit_lens:
             # 生成查找表
@@ -235,22 +239,46 @@ class ActivationScanner:
                 table_config.dtype_str = 'float32'
                 table_config.dtype_len = 32
                 table_config.unsigned_type_str = 'uint32' # 避免符号位影响正负
-                table_config.x_struct_min_int = 0x00000000
-                table_config.x_struct_max_int = 0xffffffff
+                table_config.x_struct_range_int = [(0x00000000, 0x7f7fffff), (0x80000000, 0xff7fffff)]
             else:
                 table_config.dtype_str = 'bfloat16'
                 table_config.dtype_len = 16
                 table_config.unsigned_type_str = 'uint16'
-                table_config.x_struct_min_int = 0x0000
-                table_config.x_struct_max_int = 0xffff
+                table_config.x_struct_range_int = [(0x0000, 0x7f7f), (0x8000, 0xff7f)]
             table_config.__post_init__()
-
-            self.acfun.initialize_lookup_table(table_config)
-            # 基准测试
-            benchmark_result = self.acfun.benchmark(num_runs=5)
-            
+            if sampling == 'random':
+                table_config.sample_count = 1 << (bit_len-1)
+                times = []
+                scores = []
+                sub_results = []
+                for seed in range(10): # 测试多次随机采样的分数
+                    table_config.random_seed = seed
+                    self.acfun.initialize_lookup_table(table_config)
+                    # 基准测试
+                    sub_result = self.acfun.benchmark(num_runs=2)
+                    times.append(sub_result['avg_time'])
+                    scores.append(sub_result['avg_score'])
+                    sub_results.append(sub_result)
+                benchmark_result = {
+                    'bit_len': bit_len,
+                    'avg_time': sum(times) / len(times),
+                    'avg_score': sum(scores) / len(scores),
+                    'max_score': max(scores),
+                    'min_score': min(scores),
+                    'results': sub_results
+                }
+            elif sampling == 'binary':
+                self.acfun.initialize_lookup_table(table_config)
+                # 基准测试
+                benchmark_result = self.acfun.benchmark(num_runs=5)
+                
+            bit_len_str = None
+            if sampling == 'binary':
+                bit_len_str = bit_len
+            elif sampling == 'random':
+                bit_len_str = f"{table_config.sample_count}point"
             results.append({
-                'bit_len': bit_len,
+                'bit_len': bit_len_str,
                 'avg_time': benchmark_result['avg_time'],
                 'avg_score': benchmark_result['avg_score'],
                 'max_score': benchmark_result['max_score'],
@@ -267,8 +295,7 @@ class ActivationScanner:
         table_config.dtype_str = 'bfloat16'
         table_config.dtype_len = 16
         table_config.unsigned_type_str = 'uint16'
-        table_config.x_struct_min_int = 0x0000
-        table_config.x_struct_max_int = 0xffff
+        table_config.x_struct_range_int = [(0x0000, 0x7f7f), (0x8000, 0xff7f)]
         table_config.__post_init__()
         self.acfun.initialize_lookup_table(table_config)
         benchmark_result = self.acfun.benchmark(num_runs=5)
@@ -287,8 +314,7 @@ class ActivationScanner:
         table_config.dtype_str = 'float32'
         table_config.dtype_len = 32
         table_config.unsigned_type_str = 'uint32'
-        table_config.x_struct_min_int = 0x00000000
-        table_config.x_struct_max_int = 0xffffffff
+        table_config.x_struct_range_int = [(0x00000000, 0x7f7fffff), (0x80000000, 0xff7fffff)]
         table_config.__post_init__()
         self.acfun.initialize_lookup_table(table_config)
         benchmark_result = self.acfun.benchmark(num_runs=5)
@@ -302,8 +328,13 @@ class ActivationScanner:
         })
         
         # 打印结果
+        print("激活函数: ", self.acfun_name, "表名:", table_config.table_name)
+        print("采样：", sampling, "插值: ", interpolation)
+        print("输入形状: ", TENSOR_SHAPE)
         print("|   bitlen   | avg_time | avg_score | max_score | min_score |")
         print("|------------|----------|-----------|-----------|-----------|")
         for result in results:
             print(f"|{result['bit_len']:<12}| {result['avg_time']:.5f}s | {result['avg_score']:.7f} | {result['max_score']:.7f} | {result['min_score']:.7f} |")
         print("|------------|----------|-----------|-----------|-----------|")
+        end_time = time.perf_counter()
+        print(f"扫描共用时 {end_time - start_time:.2f} 秒")

@@ -26,6 +26,7 @@ async def get_cache(_: fastapi.Request, hash_key: str = None):
         try:
             with open(f"{save_path}/{hash_key}", "rb") as f:
                 c = f.read()
+            cache[hash_key] = c
         except:
             pass
     return fastapi.Response(content=c, media_type="application/octet-stream")

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from core.activation_functions.base_activation import ActivationScanner
 from core.base.logs import FPT25Logger, setup_logging, get_logger
-from core.base.constants import ACTIVATION_FUNCTIONS, TENSOR_SHAPE, BATCH_SIZE
+from core.base.constants import ACTIVATION_FUNCTIONS, TENSOR_SHAPE, BATCH_SIZE, SAMPLING_STRATEGIES, DEFAULT_SAMPLING_STRATEGY
 from core.activation_functions import ActivationFunctionManager, get_activation_manager, create_activation_function
 from evaluation import get_accuracy_evaluator, get_benchmark_runner, get_test_suite
 from config import get_config_manager, get_config
@@ -210,7 +210,9 @@ class FPT25Main:
             function = self.activation_manager.create_function(function_name)
             scanner = ActivationScanner(function)
             bit_lens = kwargs.get('bit_lens')
-            scanner.optimize_lookup_bit_len(bit_lens)
+            sampling = kwargs.get('sampling_strategy')
+            interpolation = kwargs.get('interpolation')
+            scanner.optimize_lookup_bit_len(bit_lens, sampling, interpolation)
 
             
         except Exception as e:
@@ -310,8 +312,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
                        help='查找表位宽列表 (10-32)')
     parser.add_argument('--interpolation', choices=['direct', 'linear', 'quadratic'],
                        default='linear', help='插值方法')
-    parser.add_argument('--sampling_strategy', choices=['uniform', 'adaptive', 'logarithmic', 'quadratic'],
-                       default='uniform', help='采样策略')
+    parser.add_argument('--sampling_strategy', choices=SAMPLING_STRATEGIES,
+                       default=DEFAULT_SAMPLING_STRATEGY, help='采样策略')
     parser.add_argument('--use_advanced_lookup', action='store_true',
                        help='使用高级查找表')
     

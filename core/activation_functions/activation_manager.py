@@ -92,9 +92,9 @@ class ActivationFunctionManager:
                 if isinstance(function_config, config_class):
                     return function_config
                 elif isinstance(function_config, dict):
-                    return config_class.from_dict(function_config)
+                    return config_class(**function_config)
                 else:
-                    self.logger.warning(f"未知的 {function_name} 配置格式，使用默认配置")
+                    self.logger.warning(f"未知的 {function_name} 配置格式 {type(function_config)}，使用默认配置")
                     return config_class()
             else:
                 self.logger.warning(f"未找到 {function_name} 的全局配置，使用默认配置")
@@ -103,6 +103,7 @@ class ActivationFunctionManager:
         except Exception as e:
             self.logger.warning(f"从全局配置加载 {function_name} 配置失败: {e}，使用默认配置")
             traceback.print_exc()
+            exit(0)
             return config_class()
     
     def get_function(self, name: str) -> BaseActivationFunction:

@@ -3,9 +3,11 @@
 提供高效的查找表算法，支持均匀采样和非均匀采样
 """
 
+
 import math
 import hashlib
 import pickle
+import random
 import torch
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Union, Callable
@@ -13,7 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from core.base.constants import (
-    DEFAULT_X_STRUCT_MAX_INT, DEFAULT_X_STRUCT_MIN_INT, TABLE_THRESH, BIT_LEN_RANGE, INTERPOLATION_METHODS,
+    TABLE_THRESH, BIT_LEN_RANGE, INTERPOLATION_METHODS,
     SAMPLING_STRATEGIES, NUMERICAL_STABILITY, EPSILON_TINY,
     DEFAULT_BIT_LEN, DEFAULT_DTYPE, DEFAULT_DTYPE_LEN, DEFAULT_UNSIGNED_TYPE, DEFAULT_INTERPOLATION,
     DEFAULT_SAMPLING_STRATEGY, DEFAULT_FIXED_POINT_FORMAT, DATA_TYPE_MAP
@@ -26,185 +28,148 @@ from core.utils.smart_cache import get_lookup_table_cache
 from config.config import LookupTableConfig
 
 
-
-
-
 class SamplingStrategy(ABC):
     """采样策略抽象基类"""
     
+    def __init__(self, config: LookupTableConfig):
+        self.config = config
+        self.sample = 3
+        self.x_points: Optional[torch.Tensor] = None
+    
     @abstractmethod
-    def generate_points(self, n_points: int, x_struct_min: torch.Tensor, x_struct_max: torch.Tensor) -> np.ndarray:
-        """生成采样点"""
+    def generate_points(self) -> torch.Tensor:
+        """根据提供的采样区间、方法和点数生成采样点"""
+
+    @abstractmethod
+    def set_cache(self, x_points: torch.Tensor):
+        """手动设置缓存，在使用缓存而不是生成点时使用"""
+
+    @abstractmethod
+    def parallel_find_point(self, value: torch.Tensor) -> torch.Tensor:
+        """（并行）根据提供的采样点和值查找对应的索引（value为二维张量）"""
+
+    @abstractmethod
+    def find_point(self, value: torch.Tensor) -> torch.Tensor:
+        """根据提供的采样点和值查找对应的索引"""
+
+class BinarySampling(SamplingStrategy):
+    """二进制采样策略"""
+
+    def generate_points(self) -> torch.Tensor:
+        """生成二进制采样点"""
+        step = 1 << (self.config.zero_len)
+
+        seq = []
+        for startX, endX in self.config.x_struct_range_int:
+            seq += list(range(startX, endX+1, step))
+
+        x_ints = [x & self.config.unsigned_mask for x in seq]
+        
+        x_points = torch.tensor(x_ints, dtype=self.config.unsigned_type).view(self.config.dtype)
+        # 二进制采样寻址无需x，所以不存储x_points
+        return x_points
+    
+    def set_cache(self, _: torch.Tensor):
+        # 二进制采样寻址无需x，所以不存储x_points
         pass
+    
+    def find_point(self, value: torch.Tensor) -> torch.Tensor:
+        """二进制直接右移就是查找索引"""
+        # if self.sample > 0:
+        #     self.sample -= 1
+        #     print("sample:", self.config.unsigned_type, self.config.zero_len, value.shape, value[:10], value.view(self.config.unsigned_type).shape)
+        return value.view(self.config.unsigned_type).int() >> (self.config.zero_len)
+
+    def parallel_find_point(self, value: torch.Tensor) -> torch.Tensor:
+        """并行查找二进制采样点"""
+        # if len(value.shape) > 1:
+        #     return torch.stack([self.parallel_find_point(v) for v in value], dim=0)
+        return self.find_point(value)
+
+class RandomSampling(SamplingStrategy):
+    """定点数随机采样策略"""
+
+    def generate_points(self) -> torch.Tensor:
+        """生成随机采样点"""
+        random.seed(self.config.random_seed)
+        # print("random sample", self.config.sample_count, "range", self.config.x_struct_range_int)
+
+        (PosStartX, PosEndX), (NegStartX, NegEndX) = self.config.x_struct_range_int
+
+        # 由于正数是int越大浮点数越大，负数是int越大浮点数越小，所以要分两部分排序
+        x_sample = sorted(random.sample(range(NegStartX, NegEndX+1), self.config.sample_count >> 1), reverse=True) + sorted(random.sample(range(PosStartX, PosEndX+1), self.config.sample_count >> 1))
+
+        self.x_points = torch.tensor(x_sample, dtype=self.config.unsigned_type).view(self.config.dtype)
+        return self.x_points
+    
+    def set_cache(self, x_points: torch.Tensor):
+        """手动设置缓存"""
+        self.x_points = x_points
+    
+    def find_point(self, value: torch.Tensor) -> torch.Tensor:
+        """找到第一个大于value的值并返回索引"""
+        idx = torch.searchsorted(self.x_points, value)
+        return idx
+
+    def parallel_find_point(self, value: torch.Tensor) -> torch.Tensor:
+        """并行查找随机采样点"""
+        idxs = torch.searchsorted(self.x_points, value)
+        return idxs
+
+
 
 
 class UniformSampling(SamplingStrategy):
     """均匀采样策略"""
-    
-    def generate_points(self, n_points: int, x_struct_min: torch.Tensor, x_struct_max: torch.Tensor) -> np.ndarray:
-        """生成均匀分布的采样点"""
-        return np.linspace(x_struct_min, x_struct_max, n_points)
-
-
-class AdaptiveSampling(SamplingStrategy):
-    """自适应采样策略（在函数变化剧烈区域密集采样）"""
-    
-    def __init__(self, function: Callable[[float], float], 
-                 sensitivity: float = 0.1):
-        self.function = function
-        self.sensitivity = sensitivity
-    
-    def generate_points(self, n_points: int, x_struct_min: torch.Tensor, x_struct_max: torch.Tensor) -> np.ndarray:
-        """生成自适应采样点 - 针对指数函数优化"""
-        # 首先生成密集的候选点
-        candidate_points = np.linspace(x_struct_min, x_struct_max, n_points * 30)  # 增加候选点密度
         
-        # 计算函数值
-        y_values = np.array([self.function(x) for x in candidate_points])
-        
-        # 计算对数梯度（更适合指数函数）
-        log_y_values = np.log(np.maximum(y_values, 1e-12))
-        gradients = np.abs(np.gradient(log_y_values))
-        
-        # 在负值区域大幅增加权重（指数函数变化最剧烈的区域）
-        negative_mask = candidate_points < 0
-        gradients[negative_mask] *= 5.0  # 在负值区域增加5倍权重
-        
-        # 在接近0的区域也增加权重
-        near_zero_mask = np.abs(candidate_points) < 1.0
-        gradients[near_zero_mask] *= 2.0
-        
-        # 平滑权重以避免过度集中
-        try:
-            from scipy.ndimage import gaussian_filter1d
-            gradients = gaussian_filter1d(gradients, sigma=1.5)
-        except ImportError:
-            # 如果没有scipy，使用简单的移动平均
-            window_size = min(3, len(gradients) // 20)
-            if window_size > 1:
-                gradients = np.convolve(gradients, np.ones(window_size)/window_size, mode='same')
-        
-        # 根据梯度选择采样点
-        weights = gradients / (np.sum(gradients) + 1e-12)
-        cumulative_weights = np.cumsum(weights)
-        
-        # 生成目标累积概率
-        target_probs = np.linspace(0, 1, n_points)
-        
-        # 找到对应的采样点
-        sampled_indices = np.searchsorted(cumulative_weights, target_probs)
-        sampled_indices = np.clip(sampled_indices, 0, len(candidate_points) - 1)
-        
-        # 确保边界点被包含
-        sampled_indices[0] = 0
-        sampled_indices[-1] = len(candidate_points) - 1
-        
-        # 去重并排序
-        unique_indices = np.unique(sampled_indices)
-        if len(unique_indices) < n_points:
-            # 如果去重后点数不够，补充均匀分布的点
-            additional_points = np.linspace(x_struct_min, x_struct_max, n_points - len(unique_indices))
-            all_points = np.concatenate([candidate_points[unique_indices], additional_points])
-            all_points = np.unique(all_points)
-            return all_points[:n_points]
-        
-        return candidate_points[unique_indices]
-
-
-class LogarithmicSampling(SamplingStrategy):
-    """对数采样策略"""
-    
-    def generate_points(self, n_points: int, x_struct_min: torch.Tensor, x_struct_max: torch.Tensor) -> np.ndarray:
-        """生成对数分布的采样点"""
-        # 确保输入为正数
-        if x_struct_min <= 0:
-            x_struct_min = EPSILON_TINY
-        if x_struct_max <= 0:
-            x_struct_max = EPSILON_TINY
-        
-        # 对数空间均匀采样
-        log_points = np.linspace(math.log(x_struct_min), math.log(x_struct_max), n_points)
-        return np.exp(log_points)
-
-
-class QuadraticSampling(SamplingStrategy):
-    """二次采样策略（在中心区域密集采样）"""
-    
-    def generate_points(self, n_points: int, x_struct_min: torch.Tensor, x_struct_max: torch.Tensor) -> np.ndarray:
-        """生成二次分布的采样点"""
-        # 使用二次函数生成权重
-        center = (x_struct_min + x_struct_max) / 2
-        width = x_struct_max - x_struct_min
-        
-        # 生成均匀分布的点
-        uniform_points = np.linspace(0, 1, n_points)
-        
-        # 应用二次变换
-        quadratic_points = uniform_points ** 2
-        
-        # 映射到目标区间
-        return x_struct_min + quadratic_points * width
-
-class BinarySampling(SamplingStrategy):
-    """二进制采样策略（按照view的方法扫描每个浮点数或定点数）"""
-
-    def validate_range(self, x_struct_min: torch.tensor, x_struct_max: torch.tensor):
-        """验证输入范围"""
-        if x_struct_min.dtype not in [torch.float32, torch.bfloat16]:
-            raise ValueError(f"不支持的x_struct_min类型: {x_struct_min.dtype}")
-        if x_struct_max.dtype not in [torch.float32, torch.bfloat16]:
-            raise ValueError(f"不支持的x_struct_max类型: {x_struct_max.dtype}")
-        if x_struct_min.dtype != x_struct_max.dtype:
-            raise ValueError(f"x_struct_min和x_struct_max类型不一致: {x_struct_min.dtype}!= {x_struct_max.dtype}")
-
-    def generate_points(self, bit_len: int, x_struct_min: torch.tensor, x_struct_max: torch.tensor) -> np.ndarray:
-        """生成二进制分布的采样点(支持float32、bfloat16)"""
-
-        # 验证输入范围
-        self.validate_range(x_struct_min, x_struct_max)
-
-        # 计算浮点数位数
-        x_start = 0
-        x_end = 0
-        total_len = 0
-        if x_struct_min.dtype == torch.float32:
-            total_len = 32
-            transit_type = torch.uint32
-            zero_len = total_len - bit_len
-            x_start = x_struct_min.view(transit_type).item() >> zero_len
-            x_end = x_struct_max.view(transit_type).item() >> zero_len
-        else:
-            total_len = 16
-            transit_type = torch.uint16
-            zero_len = total_len - bit_len
-            x_start = x_struct_min.view(transit_type).item() >> zero_len
-            x_end = x_struct_max.view(transit_type).item() >> zero_len
-
-        binary_points = []
-        for i in range(x_start, x_end):
-            binary_points.append(torch.tensor(i, dtype=x_struct_min.uint16).view(x_struct_min.dtype))
-            
+SAMPLING_STRATEGIES_MAP = {
+    'binary': BinarySampling,
+    'random': RandomSampling
+}
 
 class InterpolationMethod(ABC):
     """插值方法抽象基类"""
     
     @abstractmethod
-    def interpolate(self, x: float, x_points: np.ndarray, 
-                   y_points: np.ndarray) -> float:
-        """插值计算"""
-        pass
+    def __init__(self, x_points: torch.Tensor, y_points: torch.Tensor):
+        """准备插值，例如计算系数等，加快插值速度"""
+
+    @abstractmethod
+    def interpolate(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """根据索引和值进行插值"""
+
+    @abstractmethod
+    def parallel_interpolate(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """并行插值"""
 
 
 class DirectLookup(InterpolationMethod):
     """直接查表方法"""
-    
-    def interpolate(self, x: float, x_points: np.ndarray, 
-                   y_points: np.ndarray) -> float:
-        """直接查表"""
-        # 找到最近的索引
-        idx = np.argmin(np.abs(x_points - x))
-        return float(y_points[idx])
 
+    def __init__(self, x_points: torch.Tensor, y_points: torch.Tensor):
+        """准备直接查表"""
+        self.y_points = y_points
+        self.table_len = len(y_points)
+    
+    def interpolate(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """直接查表"""
+        return self.y_points[idx]
+
+    def parallel_interpolate(self, x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """并行直接查表"""
+        def index_select(ts: torch.Tensor, dm: int, iindex: torch.Tensor):
+            if len(iindex.shape) > 1:
+                return torch.stack([index_select(ts, dm, i) for i in iindex], dim=0)
+            # 将iindex中所有负数值偏移table_len
+            # final_idx = torch.where(iindex < 0, 
+            #                     self.table_len + iindex, 
+            #                     iindex)
+            # print(final_idx[:10], final_idx[-10:])
+            return torch.index_select(ts, 0, 
+                    torch.where(iindex < 0, 
+                                self.table_len + iindex, 
+                                iindex))
+        return index_select(self.y_points, 0, idx)
 
 class LinearInterpolation(InterpolationMethod):
     """线性插值方法"""
@@ -292,6 +257,12 @@ class QuadraticInterpolation(InterpolationMethod):
             return float(y0 + f01 * (x - x0))
         
         return float(result)
+    
+INTERPOLATION_METHODS_MAP = {
+    'direct': DirectLookup,
+    'linear': LinearInterpolation,
+    'quadratic': QuadraticInterpolation
+}
 
 
 class LookupTable:
@@ -299,9 +270,10 @@ class LookupTable:
     
     def __init__(self, config: LookupTableConfig):
         self.config = config
-        self.x_points: Optional[np.ndarray] = None
-        self.y_points: Optional[np.ndarray] = None
-        self.function: Optional[Callable[[float], float]] = None
+        self.x_points: Optional[torch.Tensor] = None
+        self.y_points: Optional[torch.Tensor] = None
+        self.table_len: Optional[int] = None
+        self.function: Optional[Callable[[torch.Tensor], torch.Tensor]] = None
         
         # 缓存优化
         self._x_points_tensor_cache: Optional[torch.Tensor] = None
@@ -316,8 +288,8 @@ class LookupTable:
         self._validate_config()
         
         # 初始化采样策略和插值方法
-        self._init_sampling_strategy()
-        self._init_interpolation_method()
+        self.sampling_strategy: SamplingStrategy = SAMPLING_STRATEGIES_MAP[self.config.sampling_strategy](self.config)
+        self.interpolation_method: InterpolationMethod = None
 
         self.sample = 9
     
@@ -341,41 +313,13 @@ class LookupTable:
     def _generate_config_hash(self) -> str:
         """生成配置哈希"""
         static_config = self.config.__dict__.copy()
-        del static_config["x_struct_min"]
-        del static_config["x_struct_max"]
+        del static_config["x_struct_range"]
+        del static_config["interpolation_method"]
+        del static_config["table_name"]
+        del static_config["use_parallel_lookup"]
         return hashlib.md5(pickle.dumps(static_config, protocol=5)).hexdigest()
     
-    def _init_sampling_strategy(self) -> None:
-        """初始化采样策略"""
-        if self.config.sampling_strategy == 'uniform':
-            self.sampling_strategy = UniformSampling()
-        elif self.config.sampling_strategy == 'adaptive':
-            # 需要先设置函数
-            self.sampling_strategy = None
-        elif self.config.sampling_strategy == 'logarithmic':
-            self.sampling_strategy = LogarithmicSampling()
-        elif self.config.sampling_strategy == 'quadratic':
-            self.sampling_strategy = QuadraticSampling()
-        elif self.config.sampling_strategy == 'binary':
-            self.sampling_strategy = BinarySampling()
-        else:
-            raise ValueError(f"不支持的采样策略: {self.config.sampling_strategy}")
-    
-    def _init_interpolation_method(self) -> None:
-        """初始化插值方法"""
-        if self.config.interpolation_method == 'direct':
-            self.interpolation_method = DirectLookup()
-        elif self.config.interpolation_method == 'linear':
-            self.interpolation_method = LinearInterpolation()
-        elif self.config.interpolation_method == 'quadratic':
-            self.interpolation_method = QuadraticInterpolation()
-        else:
-            raise InvalidInterpolationMethodError(
-                self.config.interpolation_method,
-                INTERPOLATION_METHODS
-            )
-    
-    def generate_table(self, function: Callable[[float], float]) -> None:
+    def generate_table(self, function: Callable[[torch.Tensor], torch.Tensor]) -> None:
         """生成查找表"""
         self.function = function
         
@@ -384,15 +328,11 @@ class LookupTable:
             cached_table = self.cache.get_table(self._generate_config_hash())
             if cached_table is not None:
                 self.x_points = cached_table['x_points']
+                self.table_len = len(self.x_points)
+                self.sampling_strategy.set_cache(self.x_points)
                 self.y_points = cached_table['y_points']
+                self.interpolation_method = INTERPOLATION_METHODS_MAP[self.config.interpolation_method](self.x_points, self.y_points)
                 return
-        
-        # 如果是自适应采样，需要先设置函数
-        if self.config.sampling_strategy == 'adaptive':
-            self.sampling_strategy = AdaptiveSampling(function)
-
-        self.x_points = []
-        self.y_points = []
         
         # 使用位操作生成查找表
 
@@ -404,20 +344,12 @@ class LookupTable:
         #     '''x_struct是unsigned_type类型，返回值unsigned_type类型'''
         #     return (x_struct.int() << shift).to(unsigned_type)
 
-        startX = self.config.x_struct_min_int # python内置int，不会出现负数影响位运算
-        endX = self.config.x_struct_max_int
-        step = 1 << (self.config.zero_len)
-        
+        x_points_tensor: torch.Tensor = self.sampling_strategy.generate_points()
+        self.y_points = self.function(x_points_tensor)#.numpy()
+        self.x_points = x_points_tensor#.numpy()
+        self.table_len = len(self.x_points)
+        self.interpolation_method = INTERPOLATION_METHODS_MAP[self.config.interpolation_method](self.x_points, self.y_points)
 
-        for x in range(startX, endX, step):
-            x_target_type = torch.tensor(x & self.config.unsigned_mask, dtype=self.config.unsigned_type).view(self.config.dtype) # 从LSB截断为unsigned_type，再转换为dtype
-            y_target_type = self.function(x_target_type)
-            self.x_points.append(x_target_type.item())
-            self.y_points.append(y_target_type.item())
-
-        self.x_points = np.array(self.x_points)
-        self.y_points = np.array(self.y_points)
-        
         # 缓存结果
         table_data = {
             'x_points': self.x_points,
@@ -431,6 +363,10 @@ class LookupTable:
         if self.x_points is None or self.y_points is None:
             raise ValueError("查找表未初始化，请先调用 generate_table()")
         
+        if self.config.use_parallel_lookup:
+            idx = self.sampling_strategy.parallel_find_point(x.to(self.config.dtype))
+            return self.interpolation_method.parallel_interpolate(x, idx)
+        
         if isinstance(x, torch.Tensor):
             init_dtype = x.dtype
             return torch.tensor(self._lookup_tensor(x.to(self.config.dtype)), dtype=init_dtype)
@@ -443,10 +379,9 @@ class LookupTable:
             return self._lookup_scalar(x)
         return [self._lookup_tensor(x_i) for x_i in x]
     
-    def _lookup_scalar(self, x: torch.Tensor) -> float:
+    def _lookup_scalar(self, x: torch.Tensor) -> torch.Tensor:
         """标量查找，tensor中只有1个元素"""
-        x_struct = x.view(self.config.unsigned_type).int() >> (self.config.zero_len)
-        result = self.y_points[x_struct]  # 截断位数直接算出地址，无需查表
+        result = self.interpolation_method.interpolate(self.sampling_strategy.find_point(x))  # 截断位数直接算出地址，无需遍历
         # if self.sample > 0:
         #     self.sample -= 1
         #     print(self.config.unsigned_type, self.config.zero_len, self.config.dtype)
@@ -591,8 +526,7 @@ def create_exp_table(table_name: str = "default_exp",
                      bit_len: int = DEFAULT_BIT_LEN,
                      interpolation_method = DEFAULT_INTERPOLATION,
                      sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY,
-                     x_struct_min_int: int = DEFAULT_X_STRUCT_MIN_INT,
-                     x_struct_max_int: int = DEFAULT_X_STRUCT_MAX_INT,
+                     x_struct_range_int: list = [(0x0000, 0x7f7f), (0x8000, 0xff7f)],
                      ) -> LookupTable:
     """创建指数函数查找表"""
 
@@ -600,8 +534,7 @@ def create_exp_table(table_name: str = "default_exp",
         bit_len=bit_len,
         interpolation_method=interpolation_method,
         sampling_strategy=sampling_strategy,
-        x_struct_min_int=x_struct_min_int,
-        x_struct_max_int=x_struct_max_int,
+        x_struct_range_int=x_struct_range_int,
         table_name=table_name
     )
     tbl = LookupTable(config)
@@ -612,16 +545,14 @@ def create_sigmoid_table(table_name: str = "default_sigmoid",
                          bit_len: int = DEFAULT_BIT_LEN,
                          interpolation_method = DEFAULT_INTERPOLATION,
                          sampling_strategy: str = DEFAULT_SAMPLING_STRATEGY,
-                         x_struct_min_int: int = DEFAULT_X_STRUCT_MIN_INT,
-                         x_struct_max_int: int = DEFAULT_X_STRUCT_MAX_INT,
+                         x_struct_range_int: list = [(0x0000, 0x7f7f), (0x8000, 0xff7f)],
                          ) -> LookupTable:
     """创建 Sigmoid 函数查找表"""
     config = LookupTableConfig(
         bit_len=bit_len,
         interpolation_method=interpolation_method,
         sampling_strategy=sampling_strategy,
-        x_struct_min_int=x_struct_min_int,
-        x_struct_max_int=x_struct_max_int,
+        x_struct_range_int=x_struct_range_int,
         table_name=table_name
     )
     tbl = LookupTable(config)
